@@ -16,10 +16,11 @@ TypeScript extension model can run from a Rust host. Both are done.
 - End-to-end runs (faux provider, print mode, JSON mode, session continue, interactive TUI
   driven through tmux) exercised `hello.ts`, `permission-gate.ts`, `protected-paths.ts`,
   `dynamic-tools.ts`, `todo.ts` against the real agent loop and persisted the results.
-- Not verified: live requests to Anthropic or OpenAI. No API keys exist on the development
-  machine and the Claude Code credential was deliberately not read by the assistant, so the
-  providers are covered only by request-shape unit tests. Run `pirs -p "hi"` with a Claude Code
-  login to exercise the OAuth path. The faux provider (`--model faux/scripted`,
+- Live Anthropic requests verified on 2026-09-18 through the Claude Code keychain login
+  (`pirs -p --model anthropic/claude-sonnet-4-5 "say hi in five words"` answered). A stale
+  `~/.claude/.credentials.json` is skipped in favour of the keychain entry.
+- Not verified: live OpenAI requests (no key on the development machine); covered only by
+  request-shape unit tests. The faux provider (`--model faux/scripted`,
   `PIRS_FAUX_SCRIPT=<json>`) stands in for real models in tests.
 
 ## Implemented
@@ -36,8 +37,7 @@ TypeScript extension model can run from a Rust host. Both are done.
 - Anthropic OAuth: pi's `auth.json` and the Claude Code login (`~/.claude/.credentials.json` or
   the macOS keychain) are used when no API key is set; expired file-based tokens are refreshed
   and written back; requests use pi's Claude Code conventions (Bearer auth, beta flags, identity
-  system block, tool-name casing). Verified by unit tests and a fake-home smoke test, not yet
-  against the live API.
+  system block, tool-name casing). Verified live against the Anthropic API.
 - Faux scripted provider.
 
 ### pi-agent
@@ -150,8 +150,8 @@ TypeScript extension model can run from a Rust host. Both are done.
   `sweep` example; those tests skip when it is absent.
 
 ## Suggested next steps
-1. Live-test the Anthropic and OpenAI providers with real keys; adjust thinking/effort mapping
-   for current models.
+1. Live-test the OpenAI provider with a real key; try thinking levels and tool-heavy sessions
+   against Anthropic.
 2. Compaction, then `/tree` and `/fork` in the TUI.
 3. Shortcut key binding and CLI flag parsing for extensions.
 4. Markdown rendering and tool output expansion in the TUI.
