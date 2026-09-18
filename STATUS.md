@@ -19,6 +19,7 @@ TypeScript extension model can run from a Rust host. Both are done.
 - Live Anthropic requests verified on 2026-09-18 through the Claude Code keychain login
   (`pirs -p --model anthropic/claude-sonnet-4-5 "say hi in five words"` answered). A stale
   `~/.claude/.credentials.json` is skipped in favour of the keychain entry.
+- Handoff notes for the next session are in `HANDOFF.md`.
 - Not verified: live OpenAI requests (no key on the development machine); covered only by
   request-shape unit tests. The faux provider (`--model faux/scripted`,
   `PIRS_FAUX_SCRIPT=<json>`) stands in for real models in tests.
@@ -94,9 +95,13 @@ TypeScript extension model can run from a Rust host. Both are done.
 - Settings from `~/.pi/agent/settings.json` and `.pi/settings.json`; `models.json` from both.
 - Extension discovery from `~/.pi/agent/extensions`, `.pi/extensions`, settings `extensions`,
   and `-e` flags.
-- System prompt builder ported from `system-prompt.ts` (preamble, tools, rules, addendum,
+- System prompt builder ported from `system-prompt.ts` (preamble, tools, rules, docs, addendum,
   project context, cwd, custom sections); AGENTS.md / CLAUDE.md discovery from root to cwd plus
-  the global file.
+  the global file. The `docs` section points the model at `README.md`, `docs/`, `examples/`
+  and `STATUS.md` (resolved from `PIRS_DOCS_DIR`, the source tree, or `~/.pi/agent/pirs`) so
+  it can write extensions for itself; verified by having pirs build and test one.
+- Documentation: `docs/extensions.md` (pirs API as implemented), pi's extension and session
+  format references, and `examples/extensions/` with seven working pi examples.
 - `AgentSession`: input handling (extension commands, `!`/`!!` shell, `input` event,
   `before_agent_start`), persistence of every message, extension dispatch of every lifecycle
   event, tool-call interception, provider header/payload/response hooks, model and thinking

@@ -59,6 +59,17 @@ PIRS_FAUX_SCRIPT=$PWD/script.json pirs -p --model faux/scripted "hi"
 `cargo test --workspace` runs the unit and integration tests (the extension host tests load
 pi's own example extensions when a pi checkout is present at the path in `crates/pi-ext/src/lib.rs`).
 
+## Writing extensions
+
+`docs/extensions.md` documents the extension API as pirs implements it, with pi's full
+reference alongside it in `docs/pi-extensions-reference.md` and working examples in
+`examples/extensions/`. The same paths are listed in the model's system prompt, so you can ask
+pirs to write an extension for itself:
+
+```
+> write an extension that asks for confirmation before any git push, then test it
+```
+
 ## The extension model
 
 pi extensions are TypeScript modules with a default export `function (pi: ExtensionAPI)`.
