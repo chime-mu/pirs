@@ -74,6 +74,9 @@ pub fn build_system_prompt_sections(o: &BuildSystemPromptOptions) -> Vec<(String
         let tools = if visible.is_empty() { "(none)".to_string() } else { visible.iter().map(|n| format!("- {n}: {}", o.tool_snippets[*n])).collect::<Vec<_>>().join("\n") };
         sections.push(("tools".into(), format!("{tools}\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.")));
         sections.push(("rules".into(), build_rules(&o.selected_tools, &o.tool_guidelines, &o.prompt_guidelines)));
+        if let Some(docs) = docs_section() {
+            sections.push(("docs".into(), docs));
+        }
     }
     if !o.append_system_prompt.is_empty() {
         sections.push(("addendum".into(), o.append_system_prompt.clone()));
@@ -98,6 +101,37 @@ pub fn build_system_prompt(o: &BuildSystemPromptOptions) -> String {
         return forced.clone();
     }
     build_system_prompt_sections(o).into_iter().map(|(_, c)| c).collect::<Vec<_>>().join("\n\n")
+}
+
+/// Where the pirs docs live: `PIRS_DOCS_DIR`, or the source tree this binary
+/// was built from (workspace root of `crates/pi-cli`), or `~/.pi/agent/pirs`.
+pub fn docs_root() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(d) = std::env::var_os("PIRS_DOCS_DIR") {
+        candidates.push(PathBuf::from(d));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    candidates.push(crate::session::get_agent_dir().join("pirs"));
+    candidates.into_iter().map(|c| std::fs::canonicalize(&c).unwrap_or(c)).find(|c| c.join("docs").join("extensions.md").is_file())
+}
+
+fn docs_section() -> Option<String> {
+    let root = docs_root()?;
+    let docs = root.join("docs");
+    let examples = root.join("examples");
+    Some(format!(
+        "pirs documentation (read only when the user asks about pirs itself, its extensions, tools, sessions, or how to extend it):
+- Main documentation: {}
+- Additional docs: {}
+- Examples: {} (extensions)
+- When asked to write or debug an extension, read docs/extensions.md completely first, then the relevant files under examples/extensions/. Consult docs/pi-extensions-reference.md for detailed event payload fields. Only use APIs listed as supported in docs/extensions.md.
+- Test an extension with `pirs --list-extensions -e <file>` before telling the user it works.
+- Implementation status: {}",
+        root.join("README.md").display(),
+        docs.display(),
+        examples.display(),
+        root.join("STATUS.md").display()
+    ))
 }
 
 const CONTEXT_FILE_CANDIDATES: &[&str] = &["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
