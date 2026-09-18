@@ -1,0 +1,26 @@
+[package]
+name = "pi-ext"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+uuid.workspace = true
+pi-ai = { path = "../pi-ai" }
+pi-agent = { path = "../pi-agent" }
+rquickjs = { version = "0.13", features = ["futures", "loader", "macro", "array-buffer"] }
+swc_ts_fast_strip = "58"
+swc_common = { version = "26", features = ["tty-emitter"] }
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
