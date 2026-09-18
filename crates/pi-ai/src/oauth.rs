@@ -88,17 +88,28 @@ fn keychain_credential() -> Option<OAuthCredential> {
     parse_claude_code(&doc)
 }
 
-/// Find a stored Anthropic OAuth credential without refreshing it.
-pub fn find_credential(agent_dir: &Path) -> Option<(OAuthCredential, CredentialSource)> {
+/// All stored Anthropic OAuth credentials, in priority order.
+pub fn find_credentials(agent_dir: &Path) -> Vec<(OAuthCredential, CredentialSource)> {
+    let mut out = Vec::new();
     let pi_auth = agent_dir.join("auth.json");
     if let Some(c) = read_json(&pi_auth).and_then(|d| parse_pi_auth(&d)) {
-        return Some((c, CredentialSource::PiAuthJson(pi_auth)));
+        out.push((c, CredentialSource::PiAuthJson(pi_auth)));
     }
     let cc_file = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| home().join(".claude")).join(".credentials.json");
     if let Some(c) = read_json(&cc_file).and_then(|d| parse_claude_code(&d)) {
-        return Some((c, CredentialSource::ClaudeCodeFile(cc_file)));
+        out.push((c, CredentialSource::ClaudeCodeFile(cc_file)));
     }
-    keychain_credential().map(|c| (c, CredentialSource::ClaudeCodeKeychain))
+    if let Some(c) = keychain_credential() {
+        out.push((c, CredentialSource::ClaudeCodeKeychain));
+    }
+    out
+}
+
+/// The best stored credential without refreshing: the first non-expired one,
+/// else the first one found.
+pub fn find_credential(agent_dir: &Path) -> Option<(OAuthCredential, CredentialSource)> {
+    let all = find_credentials(agent_dir);
+    all.iter().find(|(c, _)| !c.is_expired()).cloned().or_else(|| all.into_iter().next())
 }
 
 /// Refresh an access token. Returns the new credential (refresh tokens rotate).
@@ -145,20 +156,34 @@ fn store(source: &CredentialSource, cred: &OAuthCredential) -> Result<(), String
     }
 }
 
-/// Resolve a usable OAuth access token, refreshing and persisting when the
-/// stored one has expired. Keychain credentials are used only while valid so
-/// that Claude Code's own login is never rotated behind its back.
+/// Resolve a usable OAuth access token. Sources are tried in order; a valid
+/// token wins immediately, an expired file-based token is refreshed and
+/// persisted, and a source whose refresh fails is skipped. Keychain
+/// credentials are used only while valid so that Claude Code's own login is
+/// never rotated behind its back.
 pub async fn resolve_access_token(agent_dir: &Path) -> Result<Option<(String, CredentialSource)>, String> {
-    let Some((cred, source)) = find_credential(agent_dir) else { return Ok(None) };
-    if !cred.is_expired() {
-        return Ok(Some((cred.access, source)));
+    let all = find_credentials(agent_dir);
+    if all.is_empty() {
+        return Ok(None);
     }
-    if source == CredentialSource::ClaudeCodeKeychain || cred.refresh.is_empty() {
-        return Err(format!("The stored Claude Code login ({}) has expired. Run `claude` once to refresh it, or log in with pi to create ~/.pi/agent/auth.json.", source.label()));
+    if let Some((c, s)) = all.iter().find(|(c, _)| !c.is_expired()) {
+        return Ok(Some((c.access.clone(), s.clone())));
     }
-    let fresh = refresh(&cred.refresh).await?;
-    store(&source, &fresh)?;
-    Ok(Some((fresh.access, source)))
+    let mut errors = Vec::new();
+    for (cred, source) in all {
+        if source == CredentialSource::ClaudeCodeKeychain || cred.refresh.is_empty() {
+            errors.push(format!("{}: expired; run `claude` once to refresh it", source.label()));
+            continue;
+        }
+        match refresh(&cred.refresh).await {
+            Ok(fresh) => {
+                store(&source, &fresh)?;
+                return Ok(Some((fresh.access, source)));
+            }
+            Err(e) => errors.push(format!("{}: {e}", source.label())),
+        }
+    }
+    Err(format!("No usable Anthropic login. {}", errors.join("; ")))
 }
 
 #[cfg(test)]

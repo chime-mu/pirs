@@ -314,7 +314,15 @@ impl ModelRegistry {
         }
         if provider == "anthropic" {
             if let Some(dir) = &inner.agent_dir {
-                return crate::oauth::find_credential(dir).map(|(c, s)| if c.is_expired() { format!("{} (expired)", s.label()) } else { s.label() });
+                let all = crate::oauth::find_credentials(dir);
+                return crate::oauth::find_credential(dir).map(|(c, s)| {
+                    let mut label = if c.is_expired() { format!("{} (expired)", s.label()) } else { s.label() };
+                    let stale: Vec<String> = all.iter().filter(|(x, src)| x.is_expired() && *src != s).map(|(_, src)| src.label()).collect();
+                    if !stale.is_empty() {
+                        label.push_str(&format!("; ignoring expired {}", stale.join(", ")));
+                    }
+                    label
+                });
             }
         }
         None
