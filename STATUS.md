@@ -8,7 +8,7 @@ TypeScript extension model can run from a Rust host. Both are done.
 
 ## Verification state
 
-- `cargo test --workspace`: 85 tests pass (pi-ai 9, pi-agent 2, pi-cli 69, pi-ext 5).
+- `cargo test --workspace`: 89 tests pass (pi-ai 11, pi-agent 2, pi-cli 71, pi-ext 5).
 - Extension compatibility sweep (`cargo run -p pi-ext --example sweep -- <pi>/packages/coding-agent/examples/extensions`):
   71 of 77 pi example extensions load unchanged. The other 6 need npm packages not installed
   in the checkout (`@anthropic-ai/sdk`, `ms`, `@earendil-works/gondolin`,
@@ -109,7 +109,14 @@ TypeScript extension model can run from a Rust host. Both are done.
 - Modes: print (`-p`, final text), JSON (`--mode json`, event stream), interactive TUI
   (inline viewport with streaming tail, extension widgets and status entries, dialogs for
   extension `select`/`confirm`/`input` with timeouts, history, steering while running,
-  `/help /model /thinking /tools /extensions /session /new /clear /exit`).
+  `/help /model /thinking /tools /extensions /session /new /reload /clear /exit`).
+- Live extension reload (`/reload`, `ctx.reload()`): `session_shutdown(reload)` to the old
+  runtime, then the QuickJS host thread is replaced by a fresh one (so changed modules and
+  transitive imports are re-evaluated and stale timers die), extension sources are
+  re-discovered (new/removed files picked up), context files re-read, tools and commands
+  re-registered, then `session_start(reload)` and `resources_discover(reload)`. Refused while
+  the agent is running. `ctx.reload()` hands the work to the main runtime because it is called
+  from the very thread being torn down.
 - CLI flags: `-p`, `--mode`, `-m/--model`, `--thinking`, `-e`, `--no-extensions`, `-c`,
   `-r`, `--no-session`, `--session-dir`, `--system-prompt`, `--append-system-prompt`, `--tools`,
   `--sequential-tools`, `--cwd`, `--list-models`, `--list-extensions`.
@@ -121,7 +128,7 @@ TypeScript extension model can run from a Rust host. Both are done.
   autocomplete providers, themes, `onTerminalInput`. Theme colour functions return plain text.
 - CommonJS npm packages (`require`, `module.exports`), Node streams, `node:zlib`, `spawn`.
 - Custom `streamSimple` provider implementations from extensions (declarative providers work).
-- `ctx.newSession`, `ctx.fork`, `ctx.navigateTree`, `ctx.switchSession`, `ctx.reload`
+- `ctx.newSession`, `ctx.fork`, `ctx.navigateTree`, `ctx.switchSession`
   return `{ cancelled: true }`.
 - `ctx.modelRegistry.streamSimple` returns the completed message only (no token stream).
 - `pi.registerShortcut` handlers are stored but the TUI does not yet bind keys to them.

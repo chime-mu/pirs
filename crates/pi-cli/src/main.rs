@@ -164,35 +164,15 @@ async fn async_main() -> i32 {
         }
     };
 
-    // Extensions: auto-discovered roots, settings, then -e flags.
-    let mut ext_paths: Vec<PathBuf> = Vec::new();
-    if !args.no_extensions {
-        ext_paths.extend(pi_ext::discover_extensions(&settings::extension_roots(&cwd)));
-        ext_paths.extend(settings::settings_extension_paths(&settings, &cwd));
-    }
-    for e in &args.extensions {
-        let p = if e.is_absolute() { e.clone() } else { cwd.join(e) };
-        if p.is_dir() {
-            // A directory is one extension (`index.ts`); otherwise treat it as a root of extensions.
-            match ["index.ts", "index.js", "index.mjs"].iter().map(|i| p.join(i)).find(|f| f.is_file()) {
-                Some(idx) => ext_paths.push(idx),
-                None => ext_paths.extend(pi_ext::discover_extensions(&[p.clone()])),
-            }
-        } else {
-            ext_paths.push(p);
-        }
-    }
-    ext_paths.dedup();
-    let mut load_failures = Vec::new();
-    let mut loaded = Vec::new();
-    if !ext_paths.is_empty() {
-        for (path, r) in session.load_extensions(&ext_paths).await {
-            match r {
-                Ok(ext) => loaded.push(ext),
-                Err(e) => load_failures.push((path, e)),
-            }
-        }
-    }
+    // Extensions: auto-discovered roots, settings, then -e flags. The sources are kept so
+    // `/reload` can re-discover them.
+    let sources = agent_session::ExtensionSources {
+        discover: !args.no_extensions,
+        explicit: args.extensions.iter().map(|e| if e.is_absolute() { e.clone() } else { cwd.join(e) }).collect(),
+    };
+    let report = session.load_extensions(sources).await;
+    let loaded = report.loaded;
+    let load_failures = report.failures;
     if args.list_extensions {
         for ext in &loaded {
             println!("{}", ext.path);

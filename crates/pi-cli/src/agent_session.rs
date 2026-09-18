@@ -12,9 +12,9 @@ use pi_ai::*;
 use pi_ext::{CommandInfo, ContextInfo, ExtensionError, ExtensionHost, ExtensionTool, HostCallbacks, HostConfig, ToolInfo};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------------------
@@ -76,6 +76,47 @@ pub struct SessionOptions {
     pub tool_execution: ToolExecutionMode,
 }
 
+/// Where extensions come from. Kept so `/reload` can re-discover them (new files in
+/// `.pi/extensions/` are picked up, deleted ones disappear).
+#[derive(Clone, Debug, Default)]
+pub struct ExtensionSources {
+    /// Auto-discover from `~/.pi/agent/extensions`, `.pi/extensions`, and settings.
+    pub discover: bool,
+    /// Explicit `-e` paths (files, extension directories, or roots), absolute.
+    pub explicit: Vec<PathBuf>,
+}
+
+impl ExtensionSources {
+    pub fn resolve(&self, cwd: &Path, settings: &Settings) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        if self.discover {
+            paths.extend(pi_ext::discover_extensions(&crate::settings::extension_roots(cwd)));
+            paths.extend(crate::settings::settings_extension_paths(settings, cwd));
+        }
+        for p in &self.explicit {
+            if p.is_dir() {
+                // A directory is one extension (`index.ts`); otherwise treat it as a root of extensions.
+                match ["index.ts", "index.js", "index.mjs"].iter().map(|i| p.join(i)).find(|f| f.is_file()) {
+                    Some(idx) => paths.push(idx),
+                    None => paths.extend(pi_ext::discover_extensions(&[p.clone()])),
+                }
+            } else {
+                paths.push(p.clone());
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        paths.retain(|p| seen.insert(p.clone()));
+        paths
+    }
+}
+
+/// Outcome of loading (or reloading) the extension set.
+#[derive(Debug, Default)]
+pub struct LoadReport {
+    pub loaded: Vec<pi_ext::LoadedExtension>,
+    pub failures: Vec<(PathBuf, String)>,
+}
+
 pub struct Inner {
     pub cwd: PathBuf,
     pub agent: Agent,
@@ -83,7 +124,13 @@ pub struct Inner {
     pub registry: ModelRegistry,
     pub settings: Settings,
     pub ui: Arc<dyn UiBackend>,
-    host: OnceLock<ExtensionHost>,
+    /// Handle to the main tokio runtime. Host callbacks run on the extension thread's own
+    /// runtime; work that must outlive that thread (reload) is spawned here.
+    runtime: tokio::runtime::Handle,
+    /// Replaced wholesale on reload; `ExtensionHost` is a cheap channel handle.
+    host: Mutex<Option<ExtensionHost>>,
+    extension_sources: Mutex<ExtensionSources>,
+    reloading: AtomicBool,
     builtin_tools: Vec<ToolRef>,
     active_tools: Mutex<Vec<String>>,
     extension_tools: Mutex<Vec<ToolInfo>>,
@@ -123,7 +170,10 @@ impl AgentSession {
             registry: opts.registry,
             settings: opts.settings,
             ui: opts.ui,
-            host: OnceLock::new(),
+            runtime: tokio::runtime::Handle::current(),
+            host: Mutex::new(None),
+            extension_sources: Mutex::new(ExtensionSources::default()),
+            reloading: AtomicBool::new(false),
             builtin_tools,
             active_tools: Mutex::new(opts.selected_tools),
             extension_tools: Mutex::new(Vec::new()),
@@ -163,36 +213,40 @@ impl AgentSession {
         Ok(AgentSession(inner))
     }
 
-    /// Start the extension host and load the given extension files.
-    pub async fn load_extensions(&self, paths: &[PathBuf]) -> Vec<(PathBuf, Result<pi_ext::LoadedExtension, String>)> {
-        let cb: Arc<dyn HostCallbacks> = self.0.clone();
-        let host = match ExtensionHost::spawn(cb, HostConfig::new(self.0.cwd.clone())).await {
-            Ok(h) => h,
-            Err(e) => {
-                self.0.ui.emit(UiEvent::Notify { message: format!("Extension host failed to start: {e}"), kind: "error".into() });
-                return Vec::new();
-            }
-        };
-        let _ = self.0.host.set(host.clone());
-        let mut results = Vec::new();
-        for p in paths {
-            let r = host.load(p.to_string_lossy().to_string()).await;
-            results.push((p.clone(), r));
+    /// Start the extension host and load the extensions described by `sources`.
+    /// The sources are remembered for `reload`.
+    pub async fn load_extensions(&self, sources: ExtensionSources) -> LoadReport {
+        *self.0.extension_sources.lock().unwrap() = sources.clone();
+        self.0.start_host(&sources).await
+    }
+
+    /// Tear down the extension runtime and start a fresh one from the same sources.
+    /// Mirrors pi's `/reload`: `session_shutdown(reload)` to the old runtime, then
+    /// `session_start(reload)` and `resources_discover(reload)` to the new one. Context files
+    /// (`AGENTS.md` etc.) are re-read as well. A fresh QuickJS runtime is used so changed
+    /// modules (including transitive imports) are re-evaluated and stale timers die.
+    pub async fn reload(&self) -> Result<LoadReport, String> {
+        let inner = &self.0;
+        if inner.running.load(Ordering::SeqCst) {
+            return Err("cannot reload while the agent is running".into());
         }
-        host.set_loaded();
-        self.0.refresh_extension_registrations().await;
-        self.0.refresh_tools();
-        results
+        if inner.reloading.swap(true, Ordering::SeqCst) {
+            return Err("a reload is already in progress".into());
+        }
+        let report = inner.reload_inner(self).await;
+        inner.reloading.store(false, Ordering::SeqCst);
+        Ok(report)
     }
 
     pub async fn emit_session_start(&self, reason: &str) {
         self.0.dispatch("session_start", json!({"type": "session_start", "reason": reason}), None).await;
-        self.0.dispatch("resources_discover", json!({"type": "resources_discover", "cwd": self.0.cwd.to_string_lossy(), "reason": "startup"}), None).await;
+        let discover_reason = if reason == "startup" { "startup" } else { "reload" };
+        self.0.dispatch("resources_discover", json!({"type": "resources_discover", "cwd": self.0.cwd.to_string_lossy(), "reason": discover_reason}), None).await;
     }
 
     pub async fn shutdown(&self, reason: &str) {
         self.0.dispatch("session_shutdown", json!({"type": "session_shutdown", "reason": reason}), None).await;
-        if let Some(h) = self.0.host.get() {
+        if let Some(h) = self.0.host() {
             h.shutdown();
         }
     }
@@ -250,6 +304,15 @@ impl AgentSession {
 
 }
 
+pub fn reload_summary(report: &LoadReport) -> String {
+    let n = report.loaded.len();
+    let mut s = format!("reloaded {n} extension{}", if n == 1 { "" } else { "s" });
+    if !report.failures.is_empty() {
+        s.push_str(&format!(", {} failed", report.failures.len()));
+    }
+    s
+}
+
 pub fn trace(msg: &str) {
     if std::env::var_os("PIRS_TRACE").is_some() {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() % 100000).unwrap_or(0);
@@ -268,8 +331,62 @@ fn user_message(text: &str, images: &[Content]) -> AgentMessage {
 }
 
 impl Inner {
-    fn host(&self) -> Option<&ExtensionHost> {
-        self.host.get()
+    fn host(&self) -> Option<ExtensionHost> {
+        self.host.lock().unwrap().clone()
+    }
+
+    /// Spawn a host thread, load every extension from `sources`, and publish the
+    /// registrations. Any previous host must already have been removed.
+    async fn start_host(&self, sources: &ExtensionSources) -> LoadReport {
+        let paths = sources.resolve(&self.cwd, &self.settings);
+        let mut report = LoadReport::default();
+        if paths.is_empty() {
+            // No host at all: extension features stay inert and dispatch is a no-op.
+            self.refresh_extension_registrations().await;
+            self.refresh_tools();
+            return report;
+        }
+        let cb: Arc<dyn HostCallbacks> = self.self_weak.upgrade().expect("session alive");
+        let host = match ExtensionHost::spawn(cb, HostConfig::new(self.cwd.clone())).await {
+            Ok(h) => h,
+            Err(e) => {
+                self.ui.emit(UiEvent::Notify { message: format!("Extension host failed to start: {e}"), kind: "error".into() });
+                return report;
+            }
+        };
+        *self.host.lock().unwrap() = Some(host.clone());
+        for p in &paths {
+            match host.load(p.to_string_lossy().to_string()).await {
+                Ok(ext) => report.loaded.push(ext),
+                Err(e) => report.failures.push((p.clone(), e)),
+            }
+        }
+        host.set_loaded();
+        self.refresh_extension_registrations().await;
+        self.refresh_tools();
+        report
+    }
+
+    async fn reload_inner(&self, session: &AgentSession) -> LoadReport {
+        trace("reload start");
+        self.dispatch("session_shutdown", json!({"type": "session_shutdown", "reason": "reload"}), None).await;
+        let old = self.host.lock().unwrap().take();
+        if let Some(old) = old {
+            old.invalidate().await;
+            old.shutdown();
+        }
+        self.extension_tools.lock().unwrap().clear();
+        self.commands.lock().unwrap().clear();
+        self.extension_errors.lock().unwrap().clear();
+        self.prompt_options.lock().unwrap().context_files = crate::system_prompt::load_context_files(&self.cwd);
+        let sources = self.extension_sources.lock().unwrap().clone();
+        let report = self.start_host(&sources).await;
+        for (p, e) in &report.failures {
+            self.record_error(ExtensionError { extension_path: p.to_string_lossy().to_string(), event: "load".into(), error: e.clone(), stack: None });
+        }
+        session.emit_session_start("reload").await;
+        trace("reload end");
+        report
     }
 
     async fn dispatch(&self, event: &str, payload: Value, cancel: Option<CancellationToken>) -> Value {
@@ -303,9 +420,15 @@ impl Inner {
     }
 
     async fn refresh_extension_registrations(&self) {
-        if let Some(h) = self.host() {
-            *self.extension_tools.lock().unwrap() = h.list_tools().await;
-            *self.commands.lock().unwrap() = h.list_commands().await;
+        match self.host() {
+            Some(h) => {
+                *self.extension_tools.lock().unwrap() = h.list_tools().await;
+                *self.commands.lock().unwrap() = h.list_commands().await;
+            }
+            None => {
+                self.extension_tools.lock().unwrap().clear();
+                self.commands.lock().unwrap().clear();
+            }
         }
     }
 
@@ -851,6 +974,21 @@ impl HostCallbacks for Inner {
     fn abort(&self) {
         self.agent.abort();
     }
+    /// `ctx.reload()`. This runs on the extension thread that is about to be torn down, so
+    /// the work is handed to the main runtime and the call returns immediately; the calling
+    /// handler is terminated when its runtime goes away (pi documents reload as terminal).
+    async fn reload(&self) {
+        let Some(inner) = self.self_weak.upgrade() else { return };
+        self.runtime.spawn(async move {
+            let session = AgentSession(inner.clone());
+            // Let the JS handler that called us observe the resolved promise first.
+            tokio::task::yield_now().await;
+            match session.reload().await {
+                Ok(report) => inner.ui.emit(UiEvent::Notify { message: reload_summary(&report), kind: "info".into() }),
+                Err(e) => inner.ui.emit(UiEvent::Notify { message: format!("reload failed: {e}"), kind: "error".into() }),
+            }
+        });
+    }
     fn shutdown(&self) {
         self.shutdown_requested.store(true, Ordering::SeqCst);
         if !self.running.load(Ordering::SeqCst) {
@@ -999,4 +1137,152 @@ pub fn resolve_startup_model(registry: &ModelRegistry, spec: Option<&str>, setti
         return Ok(m);
     }
     anyhow::bail!("No model available. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, add providers to ~/.pi/agent/models.json, or use --model faux/scripted for an offline demo.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NullUi(Mutex<Vec<UiEvent>>);
+    #[async_trait]
+    impl UiBackend for NullUi {
+        fn mode(&self) -> &'static str {
+            "print"
+        }
+        fn has_ui(&self) -> bool {
+            false
+        }
+        fn emit(&self, event: UiEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    async fn session(cwd: &Path, ui: Arc<NullUi>) -> AgentSession {
+        let registry = ModelRegistry::with_builtins();
+        let model = registry.get("faux", "scripted").expect("faux model");
+        AgentSession::new(SessionOptions {
+            cwd: cwd.to_path_buf(),
+            settings: Settings::default(),
+            registry,
+            model,
+            thinking_level: ThinkingLevel::Off,
+            session: SessionManager::in_memory(&cwd.to_string_lossy()).unwrap(),
+            ui,
+            custom_prompt: None,
+            append_system_prompt: None,
+            selected_tools: vec!["read".into()],
+            tool_execution: ToolExecutionMode::Sequential,
+        })
+        .await
+        .unwrap()
+    }
+
+    fn extension_source(version: &str, log: &Path, extra_tool: bool) -> String {
+        let tool = if extra_tool {
+            r#"pi.registerTool({ name: "added_later", label: "x", description: "v2 only", parameters: Type.Object({}), async execute() { return { content: [{ type: "text", text: "ok" }] }; } });"#
+        } else {
+            ""
+        };
+        format!(
+            r#"
+import {{ Type }} from "@sinclair/typebox";
+import * as fs from "node:fs";
+const log = (line) => fs.appendFileSync({log:?}, line + "\n");
+export default function (pi) {{
+  pi.registerCommand("hello", {{ description: "hello {version}", async handler(_args, ctx) {{ log("run {version}"); }} }});
+  {tool}
+  pi.on("session_start", (ev) => log("start {version} " + ev.reason));
+  pi.on("session_shutdown", (ev) => log("shutdown {version} " + ev.reason));
+  pi.on("resources_discover", (ev) => log("discover {version} " + ev.reason));
+}}
+"#,
+            log = log.to_string_lossy(),
+        )
+    }
+
+    fn read_log(p: &Path) -> Vec<String> {
+        std::fs::read_to_string(p).unwrap_or_default().lines().map(String::from).collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_reevaluates_changed_extension_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join("ext.ts");
+        let log = dir.path().join("log.txt");
+        std::fs::write(&ext, extension_source("v1", &log, false)).unwrap();
+
+        let ui = Arc::new(NullUi(Mutex::new(Vec::new())));
+        let s = session(dir.path(), ui.clone()).await;
+        let report = s.load_extensions(ExtensionSources { discover: false, explicit: vec![ext.clone()] }).await;
+        assert_eq!(report.loaded.len(), 1, "{:?}", report.failures);
+        s.emit_session_start("startup").await;
+
+        let cmds = s.commands();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].description, "hello v1");
+        assert!(!s.0.agent.tools().iter().any(|t| t.name() == "added_later"));
+
+        // Change the file on disk: new description, a new tool, and an AGENTS.md appears.
+        std::fs::write(&ext, extension_source("v2", &log, true)).unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "reloaded rules").unwrap();
+
+        let report = s.reload().await.unwrap();
+        assert_eq!(report.loaded.len(), 1, "{:?}", report.failures);
+
+        let cmds = s.commands();
+        assert_eq!(cmds.len(), 1, "old registrations must not survive: {cmds:?}");
+        assert_eq!(cmds[0].description, "hello v2");
+        assert!(s.0.agent.tools().iter().any(|t| t.name() == "added_later"), "new tool is callable after reload");
+        assert!(s.0.prompt_options.lock().unwrap().context_files.iter().any(|c| c.content == "reloaded rules"), "context files re-read");
+
+        // The new runtime answers commands; the old one is gone.
+        s.submit("/hello".into(), Vec::new(), None).await.unwrap();
+
+        assert_eq!(
+            read_log(&log),
+            vec!["start v1 startup", "discover v1 startup", "shutdown v1 reload", "start v2 reload", "discover v2 reload", "run v2"]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctx_reload_from_a_command_swaps_the_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join("ext.ts");
+        let log = dir.path().join("log.txt");
+        let src = |tag: &str| {
+            format!(
+                r#"
+import * as fs from "node:fs";
+export default function (pi) {{
+  pi.registerCommand("go", {{ description: "{tag}", async handler(_args, ctx) {{
+    await ctx.reload();
+    fs.appendFileSync({log:?}, "after-reload {tag}\n");
+  }} }});
+  pi.on("session_start", (ev) => fs.appendFileSync({log:?}, "start {tag} " + ev.reason + "\n"));
+}}
+"#,
+                log = log.to_string_lossy()
+            )
+        };
+        std::fs::write(&ext, src("one")).unwrap();
+        let ui = Arc::new(NullUi(Mutex::new(Vec::new())));
+        let s = session(dir.path(), ui.clone()).await;
+        s.load_extensions(ExtensionSources { discover: false, explicit: vec![ext.clone()] }).await;
+        s.emit_session_start("startup").await;
+
+        std::fs::write(&ext, src("two")).unwrap();
+        s.submit("/go".into(), Vec::new(), None).await.unwrap();
+        // The reload itself runs on the main runtime after the command returns.
+        for _ in 0..200 {
+            if s.commands().first().map(|c| c.description.as_str()) == Some("two") && !s.0.reloading.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert_eq!(s.commands()[0].description, "two");
+        let log = read_log(&log);
+        assert!(log.contains(&"start two reload".to_string()), "{log:?}");
+        let notes: Vec<String> = ui.0.lock().unwrap().iter().filter_map(|e| if let UiEvent::Notify { message, .. } = e { Some(message.clone()) } else { None }).collect();
+        assert!(notes.iter().any(|m| m.starts_with("reloaded 1 extension")), "{notes:?}");
+    }
 }

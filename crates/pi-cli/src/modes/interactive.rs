@@ -479,6 +479,7 @@ fn help_text() -> String {
         "  /extensions           list loaded extensions, commands and errors",
         "  /session              show the session file",
         "  /new                  start a new session",
+        "  /reload               reload extensions and context files (AGENTS.md etc.)",
         "  /clear                clear the screen",
         "  /exit, /quit          exit",
         "  !cmd  !!cmd           run a shell command (!! keeps it out of the model context)",
@@ -676,6 +677,20 @@ async fn handle_builtin_command(session: &AgentSession, ui: &mut Ui, text: &str,
                     ui.push_text("started a new session", width, info, "");
                 }
                 Err(e) => ui.push_text(&format!("could not start session: {e}"), width, Style::default().fg(Color::Red), ""),
+            }
+        }
+        "reload" => {
+            match session.reload().await {
+                Ok(report) => {
+                    ui.push_text(&crate::agent_session::reload_summary(&report), width, info, "");
+                    for ext in &report.loaded {
+                        ui.push_text(&format!("  {}", ext.path), width, info, "");
+                    }
+                    for (p, e) in &report.failures {
+                        ui.push_text(&format!("  FAILED {}: {}", p.display(), e.lines().next().unwrap_or("")), width, Style::default().fg(Color::Red), "");
+                    }
+                }
+                Err(e) => ui.push_text(&format!("reload failed: {e}"), width, Style::default().fg(Color::Red), ""),
             }
         }
         _ => return false,

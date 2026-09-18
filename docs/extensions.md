@@ -133,6 +133,10 @@ changes
   model_select { model, previousModel, source }
   thinking_level_select { level, previousLevel }
   session_info_changed { name }
+/reload (or ctx.reload() from a command)
+  session_shutdown { reason: "reload" }             to the old runtime, which is then discarded
+  session_start { reason: "reload" }                to a fresh runtime with re-read extension files
+  resources_discover { cwd, reason: "reload" }
 exit
   session_shutdown { reason: "quit" }
 ```
@@ -184,8 +188,14 @@ All handlers, tool `execute` functions, and command handlers receive `ctx`.
 | `ctx.isIdle()`, `ctx.abort()`, `ctx.hasPendingMessages()`, `ctx.shutdown()` | control |
 | `ctx.getContextUsage()`, `ctx.getSystemPrompt()`, `ctx.compact()` | usage `{ tokens, contextWindow, percent }`; `compact` is a no-op |
 
-Command handlers additionally get `ctx.waitForIdle()` and `ctx.getSystemPromptOptions()`.
-`ctx.newSession`, `fork`, `navigateTree`, `switchSession`, `reload` resolve to `{ cancelled: true }`.
+Command handlers additionally get `ctx.waitForIdle()`, `ctx.getSystemPromptOptions()` and
+`ctx.reload()`. `ctx.reload()` does the same as `/reload`: the whole extension runtime is torn down
+and rebuilt (extension files, including new or deleted ones in `.pi/extensions/` and
+`~/.pi/agent/extensions/`, are re-read from disk; `AGENTS.md`-style context files are re-read too).
+Treat it as terminal for the calling handler: it returns immediately, and any code after
+`await ctx.reload()` runs on the old runtime, which goes away moments later. Reload is refused
+while the agent is running.
+`ctx.newSession`, `fork`, `navigateTree`, `switchSession` resolve to `{ cancelled: true }`.
 
 ## `pi` (ExtensionAPI)
 
@@ -251,7 +261,7 @@ from `ctx.sessionManager.getBranch()`) or in `pi.appendEntry` entries, exactly a
   autocomplete). Use `select`, `confirm`, `input`, `notify`, `setStatus`, `setWidget`.
 - Colours: `theme.fg`, `theme.bold`, etc. return plain text.
 - CommonJS packages and Node streams are unavailable; `child_process.spawn` throws (use `pi.exec`).
-- Compaction, tree navigation, session switching, forking and reload are not implemented, so
+- Compaction, tree navigation, session switching and forking are not implemented, so
   their events never fire and their `ctx` methods return `{ cancelled: true }`.
 - Shortcuts and flags are registered but not yet wired to keys or CLI arguments.
 - Custom provider stream implementations are not supported; declarative providers are.

@@ -113,8 +113,9 @@ and pi-style `input`, `tool_result`, `before_agent_start` handlers.
   `AbortController`, `TextEncoder/Decoder`, `process.env`.
 - Custom `streamSimple` providers registered from extensions (`registerProvider` with `api`,
   `baseUrl`, `apiKey`, and `models` works).
-- `ctx.newSession`, `ctx.fork`, `ctx.navigateTree`, `ctx.switchSession`, `ctx.reload` return
-  `{ cancelled: true }`.
+- `ctx.newSession`, `ctx.fork`, `ctx.navigateTree`, `ctx.switchSession` return
+  `{ cancelled: true }`. `/reload` and `ctx.reload()` work: the extension runtime is rebuilt
+  from disk and `session_shutdown`/`session_start` fire with `reason: "reload"`.
 
 ## What else is and is not ported
 
