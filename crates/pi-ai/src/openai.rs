@@ -34,7 +34,7 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<Value> {
         let role = if is_openai_url(&model.base_url) { "developer" } else { "system" };
         out.push(json!({"role": role, "content": sp}));
     }
-    for m in &context.messages {
+    for m in &crate::transform::transform_messages(&context.messages) {
         match m {
             Message::System(_) => {}
             Message::User(u) => {

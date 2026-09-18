@@ -7,9 +7,11 @@ pub mod oauth;
 pub mod openai;
 pub mod registry;
 pub mod sse;
+pub mod transform;
 pub mod types;
 
 pub use registry::{complete, stream, ModelRegistry, ProviderConfig, ProviderModelConfig};
+pub use transform::transform_messages;
 pub use types::*;
 
 #[cfg(test)]
@@ -102,6 +104,91 @@ mod tests {
         let body = anthropic::build_request(&model, &ctx, &StreamOptions { api_key: Some("sk-ant-api03-x".into()), ..Default::default() });
         assert_eq!(body["system"][0]["text"], "sys");
         assert_eq!(body["tools"][0]["name"], "bash");
+    }
+
+    #[test]
+    fn errored_assistant_with_tool_call_is_not_replayed() {
+        // Regression: a stream that died mid-tool-call ("Stream error: error decoding response
+        // body") left an assistant message with stop_reason=error and a tool_use in context; the
+        // next prompt then failed with HTTP 400 "tool_use ids were found without tool_result".
+        let reg = ModelRegistry::with_builtins();
+        let model = reg.get("anthropic", "claude-sonnet-4-5").unwrap();
+        let ctx = Context {
+            system_prompt: None,
+            messages: vec![
+                Message::user("do it"),
+                Message::Assistant(AssistantMessage {
+                    content: vec![Content::ToolCall { id: "t1".into(), name: "bash".into(), arguments: json!({"command":"ls"}), thought_signature: None }],
+                    stop_reason: StopReason::ToolUse,
+                    ..AssistantMessage::new(&model)
+                }),
+                Message::ToolResult(ToolResultMessage { tool_call_id: "t1".into(), tool_name: "bash".into(), content: vec![Content::text("ok")], details: None, usage: None, is_error: false, timestamp: 0 }),
+                Message::Assistant(AssistantMessage {
+                    content: vec![
+                        Content::text("Now writing"),
+                        Content::ToolCall { id: "t2".into(), name: "write".into(), arguments: json!({}), thought_signature: None },
+                    ],
+                    stop_reason: StopReason::Error,
+                    error_message: Some("Stream error: error decoding response body".into()),
+                    ..AssistantMessage::new(&model)
+                }),
+                Message::user("What happened?"),
+            ],
+            tools: vec![],
+        };
+        let body = anthropic::build_request(&model, &ctx, &StreamOptions::default());
+        let msgs = body["messages"].as_array().unwrap();
+        // Every tool_use must be answered by a tool_result in the next message.
+        for (i, m) in msgs.iter().enumerate() {
+            for b in m["content"].as_array().unwrap() {
+                if b["type"] == "tool_use" {
+                    let next = &msgs[i + 1];
+                    assert_eq!(next["role"], "user");
+                    assert!(next["content"].as_array().unwrap().iter().any(|r| r["type"] == "tool_result" && r["tool_use_id"] == b["id"]), "tool_use {} unanswered", b["id"]);
+                }
+            }
+        }
+        assert!(!body.to_string().contains("t2"), "errored assistant message must be dropped");
+        assert_eq!(msgs.last().unwrap()["content"][0]["text"], "What happened?");
+    }
+
+    #[test]
+    fn orphaned_tool_calls_get_synthetic_results() {
+        let reg = ModelRegistry::with_builtins();
+        let model = reg.get("anthropic", "claude-sonnet-4-5").unwrap();
+        let assistant = Message::Assistant(AssistantMessage {
+            content: vec![
+                Content::ToolCall { id: "a".into(), name: "read".into(), arguments: json!({"path":"x"}), thought_signature: None },
+                Content::ToolCall { id: "b".into(), name: "bash".into(), arguments: json!({"command":"pwd"}), thought_signature: None },
+            ],
+            stop_reason: StopReason::ToolUse,
+            ..AssistantMessage::new(&model)
+        });
+        let result_a = Message::ToolResult(ToolResultMessage { tool_call_id: "a".into(), tool_name: "read".into(), content: vec![Content::text("done")], details: None, usage: None, is_error: false, timestamp: 0 });
+
+        // Interrupted by a user turn: the missing result is synthesized before the user message.
+        let out = transform_messages(&[Message::user("go"), assistant.clone(), result_a.clone(), Message::user("next")]);
+        assert_eq!(out.len(), 5);
+        match &out[3] {
+            Message::ToolResult(t) => {
+                assert_eq!(t.tool_call_id, "b");
+                assert_eq!(t.tool_name, "bash");
+                assert!(t.is_error);
+                assert_eq!(t.content[0].as_text(), Some(transform::NO_RESULT_TEXT));
+            }
+            other => panic!("expected synthetic tool result, got {}", other.role()),
+        }
+        assert!(matches!(out[4], Message::User(_)));
+
+        // Trailing orphan: synthesized at the end.
+        let out = transform_messages(&[Message::user("go"), assistant.clone(), result_a.clone()]);
+        assert_eq!(out.len(), 4);
+        assert!(matches!(&out[3], Message::ToolResult(t) if t.tool_call_id == "b"));
+
+        // Fully answered: untouched.
+        let result_b = Message::ToolResult(ToolResultMessage { tool_call_id: "b".into(), tool_name: "bash".into(), content: vec![Content::text("/")], details: None, usage: None, is_error: false, timestamp: 0 });
+        let input = vec![Message::user("go"), assistant, result_a, result_b];
+        assert_eq!(transform_messages(&input).len(), input.len());
     }
 
     #[test]

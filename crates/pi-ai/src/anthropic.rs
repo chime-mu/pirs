@@ -119,7 +119,7 @@ pub fn build_request(model: &Model, context: &Context, options: &StreamOptions) 
     let oauth = options.api_key.as_deref().map(crate::oauth::is_oauth_token).unwrap_or(false);
     let mut body = json!({
         "model": model.id,
-        "messages": convert_messages(&context.messages, model.supports_images(), oauth),
+        "messages": convert_messages(&crate::transform::transform_messages(&context.messages), model.supports_images(), oauth),
         "max_tokens": options.max_tokens.unwrap_or(model.max_tokens),
         "stream": true,
     });
