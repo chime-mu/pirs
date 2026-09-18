@@ -326,6 +326,11 @@ pub trait AgentHooks: Send + Sync {
     async fn should_stop_after_turn(&self, _message: &AssistantMessage) -> bool {
         false
     }
+    /// Called before every LLM request; return `Some` to replace the tool set
+    /// for the rest of the run (tools registered mid-run become callable).
+    async fn refresh_tools(&self) -> Option<Vec<ToolRef>> {
+        None
+    }
 }
 
 pub struct NoHooks;

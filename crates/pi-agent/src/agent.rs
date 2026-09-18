@@ -48,6 +48,7 @@ pub struct Agent {
 struct QueueHooks {
     inner: Arc<dyn AgentHooks>,
     queues: Arc<Mutex<Queues>>,
+    state: Arc<Mutex<AgentState>>,
 }
 
 #[async_trait]
@@ -80,6 +81,9 @@ impl AgentHooks for QueueHooks {
     }
     async fn should_stop_after_turn(&self, message: &AssistantMessage) -> bool {
         self.inner.should_stop_after_turn(message).await
+    }
+    async fn refresh_tools(&self) -> Option<Vec<ToolRef>> {
+        Some(self.state.lock().unwrap().tools.clone())
     }
 }
 
@@ -255,7 +259,7 @@ impl Agent {
         let cancel = CancellationToken::new();
         *self.cancel.lock().unwrap() = Some(cancel.clone());
         let (input, config) = self.loop_input_and_config();
-        let hooks: Arc<dyn AgentHooks> = Arc::new(QueueHooks { inner: self.hooks.lock().unwrap().clone(), queues: self.queues.clone() });
+        let hooks: Arc<dyn AgentHooks> = Arc::new(QueueHooks { inner: self.hooks.lock().unwrap().clone(), queues: self.queues.clone(), state: self.state.clone() });
         let sink = self.make_sink();
 
         // Mirror the loop's context into agent state as events arrive.
