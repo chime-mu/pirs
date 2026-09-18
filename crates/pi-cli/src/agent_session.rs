@@ -610,7 +610,13 @@ impl AgentHooks for Inner {
     }
 
     async fn get_api_key(&self, provider: &str) -> Option<String> {
-        self.registry.resolve_api_key(provider)
+        match self.registry.resolve_api_key_async(provider).await {
+            Ok(k) => k,
+            Err(e) => {
+                self.ui.emit(UiEvent::Notify { message: e, kind: "error".into() });
+                None
+            }
+        }
     }
 
     async fn stream_options(&self) -> StreamOptions {

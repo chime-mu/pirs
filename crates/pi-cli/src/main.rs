@@ -87,11 +87,12 @@ async fn async_main() -> i32 {
     let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
     let settings = settings::load_settings(&cwd);
     let registry = ModelRegistry::with_builtins();
+    registry.set_agent_dir(settings::agent_dir());
     settings::load_models_json(&cwd, &registry);
 
     if args.list_models {
         for m in registry.models() {
-            let auth = if registry.has_credentials(&m.provider) { "credentials: yes" } else { "credentials: no" };
+            let auth = registry.credential_source(&m.provider).map(|s| format!("credentials: {s}")).unwrap_or_else(|| "credentials: none".into());
             println!("{:<40} {:<22} ctx={:<8} {}", m.key(), m.api, m.context_window, auth);
         }
         return 0;

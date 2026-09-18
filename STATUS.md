@@ -1,6 +1,6 @@
 # pirs status
 
-Last updated: 2026-09-18 (initial commit `485609d`).
+Last updated: 2026-09-18.
 
 pirs is a Rust port of [pi](https://github.com/earendil-works/pi). The goal of the first
 milestone was a working coding agent with pi's architecture and, above all, proof that pi's
@@ -8,7 +8,7 @@ TypeScript extension model can run from a Rust host. Both are done.
 
 ## Verification state
 
-- `cargo test --workspace`: 82 tests pass (pi-ai 6, pi-agent 2, pi-cli 69, pi-ext 5).
+- `cargo test --workspace`: 85 tests pass (pi-ai 9, pi-agent 2, pi-cli 69, pi-ext 5).
 - Extension compatibility sweep (`cargo run -p pi-ext --example sweep -- <pi>/packages/coding-agent/examples/extensions`):
   71 of 77 pi example extensions load unchanged. The other 6 need npm packages not installed
   in the checkout (`@anthropic-ai/sdk`, `ms`, `@earendil-works/gondolin`,
@@ -17,8 +17,10 @@ TypeScript extension model can run from a Rust host. Both are done.
   driven through tmux) exercised `hello.ts`, `permission-gate.ts`, `protected-paths.ts`,
   `dynamic-tools.ts`, `todo.ts` against the real agent loop and persisted the results.
 - Not verified: live requests to Anthropic or OpenAI. No API keys exist on the development
-  machine, so the providers are covered only by request-shape unit tests. The faux provider
-  (`--model faux/scripted`, `PIRS_FAUX_SCRIPT=<json>`) stands in for them.
+  machine and the Claude Code credential was deliberately not read by the assistant, so the
+  providers are covered only by request-shape unit tests. Run `pirs -p "hi"` with a Claude Code
+  login to exercise the OAuth path. The faux provider (`--model faux/scripted`,
+  `PIRS_FAUX_SCRIPT=<json>`) stands in for real models in tests.
 
 ## Implemented
 
@@ -31,6 +33,11 @@ TypeScript extension model can run from a Rust host. Both are done.
 - SSE parser, truncated-JSON salvage for tool arguments.
 - Model registry with a built-in catalog, `models.json` providers (`$ENV` and `!command` keys),
   `registerProvider` from extensions, credential resolution from env vars.
+- Anthropic OAuth: pi's `auth.json` and the Claude Code login (`~/.claude/.credentials.json` or
+  the macOS keychain) are used when no API key is set; expired file-based tokens are refreshed
+  and written back; requests use pi's Claude Code conventions (Bearer auth, beta flags, identity
+  system block, tool-name casing). Verified by unit tests and a fake-home smoke test, not yet
+  against the live API.
 - Faux scripted provider.
 
 ### pi-agent
@@ -121,7 +128,8 @@ TypeScript extension model can run from a Rust host. Both are done.
 - `/tree`, `/fork`, `/resume` navigation in the TUI (the session manager supports branching and
   forking, the UI does not expose it).
 - Skills, prompt templates, `/skill:` and template expansion.
-- RPC mode, package installation (`pi install`, `packages` setting), OAuth logins, update checks.
+- RPC mode, package installation (`pi install`, `packages` setting), interactive OAuth login
+  flows (`/login`; existing pi or Claude Code logins are reused), update checks.
 - Image attachments from the editor and image resizing (the `read` tool does return images).
 - Markdown rendering in the TUI (plain wrapped text), tool output expansion, multi-line editor
   features beyond alt+enter, autocomplete.

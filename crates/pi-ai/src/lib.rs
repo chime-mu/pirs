@@ -3,6 +3,7 @@
 pub mod anthropic;
 pub mod faux;
 pub mod json_salvage;
+pub mod oauth;
 pub mod openai;
 pub mod registry;
 pub mod sse;
@@ -69,6 +70,38 @@ mod tests {
         assert_eq!(body["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+    }
+
+    #[test]
+    fn anthropic_oauth_request_uses_claude_code_conventions() {
+        let reg = ModelRegistry::with_builtins();
+        let model = reg.get("anthropic", "claude-sonnet-4-5").unwrap();
+        let ctx = Context {
+            system_prompt: Some("sys".into()),
+            messages: vec![
+                Message::user("hello"),
+                Message::Assistant(AssistantMessage {
+                    content: vec![Content::ToolCall { id: "t1".into(), name: "bash".into(), arguments: json!({"command":"ls"}), thought_signature: None }],
+                    ..AssistantMessage::new(&model)
+                }),
+                Message::ToolResult(ToolResultMessage { tool_call_id: "t1".into(), tool_name: "bash".into(), content: vec![Content::text("ok")], details: None, usage: None, is_error: false, timestamp: 0 }),
+            ],
+            tools: vec![
+                Tool { name: "bash".into(), description: "d".into(), parameters: json!({"type":"object"}) },
+                Tool { name: "hello".into(), description: "d".into(), parameters: json!({"type":"object"}) },
+            ],
+        };
+        let opts = StreamOptions { api_key: Some("sk-ant-oat01-token".into()), ..Default::default() };
+        let body = anthropic::build_request(&model, &ctx, &opts);
+        assert_eq!(body["system"][0]["text"], "You are Claude Code, Anthropic's official CLI for Claude.");
+        assert_eq!(body["system"][1]["text"], "sys");
+        assert_eq!(body["tools"][0]["name"], "Bash");
+        assert_eq!(body["tools"][1]["name"], "hello");
+        assert_eq!(body["messages"][1]["content"][0]["name"], "Bash");
+        // Plain API keys keep our names and no identity block.
+        let body = anthropic::build_request(&model, &ctx, &StreamOptions { api_key: Some("sk-ant-api03-x".into()), ..Default::default() });
+        assert_eq!(body["system"][0]["text"], "sys");
+        assert_eq!(body["tools"][0]["name"], "bash");
     }
 
     #[test]

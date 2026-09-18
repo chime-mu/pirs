@@ -8,6 +8,23 @@ use std::collections::HashMap;
 
 pub const API: &str = "anthropic-messages";
 
+/// Claude Code version reported in the user agent for OAuth requests.
+pub const CLAUDE_CODE_VERSION: &str = "2.1.251";
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+/// Claude Code tool names (canonical casing). OAuth requests must use these
+/// names for matching tools; responses are mapped back to our names.
+const CLAUDE_CODE_TOOLS: &[&str] = &[
+    "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "KillShell", "NotebookEdit", "Skill", "Task", "TaskOutput", "TodoWrite", "WebFetch", "WebSearch",
+];
+
+pub fn to_claude_code_name(name: &str) -> String {
+    CLAUDE_CODE_TOOLS.iter().find(|t| t.eq_ignore_ascii_case(name)).map(|t| t.to_string()).unwrap_or_else(|| name.to_string())
+}
+
+fn from_claude_code_name(name: &str, tools: &[Tool]) -> String {
+    tools.iter().find(|t| t.name.eq_ignore_ascii_case(name)).map(|t| t.name.clone()).unwrap_or_else(|| name.to_string())
+}
+
 fn convert_content_for_user(blocks: &[Content]) -> Vec<Value> {
     blocks
         .iter()
@@ -22,7 +39,7 @@ fn convert_content_for_user(blocks: &[Content]) -> Vec<Value> {
         .collect()
 }
 
-fn convert_messages(messages: &[Message], supports_images: bool) -> Vec<Value> {
+fn convert_messages(messages: &[Message], supports_images: bool, oauth: bool) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for m in messages {
         match m {
@@ -57,6 +74,7 @@ fn convert_messages(messages: &[Message], supports_images: bool) -> Vec<Value> {
                             // Thinking without a signature cannot be replayed; drop it.
                         }
                         Content::ToolCall { id, name, arguments, .. } => {
+                            let name = if oauth { to_claude_code_name(name) } else { name.clone() };
                             blocks.push(json!({"type": "tool_use", "id": id, "name": name, "input": arguments}));
                         }
                         Content::Image { .. } => {}
@@ -98,20 +116,29 @@ fn convert_messages(messages: &[Message], supports_images: bool) -> Vec<Value> {
 }
 
 pub fn build_request(model: &Model, context: &Context, options: &StreamOptions) -> Value {
+    let oauth = options.api_key.as_deref().map(crate::oauth::is_oauth_token).unwrap_or(false);
     let mut body = json!({
         "model": model.id,
-        "messages": convert_messages(&context.messages, model.supports_images()),
+        "messages": convert_messages(&context.messages, model.supports_images(), oauth),
         "max_tokens": options.max_tokens.unwrap_or(model.max_tokens),
         "stream": true,
     });
+    let mut system: Vec<Value> = Vec::new();
+    if oauth {
+        // OAuth tokens are only accepted with the Claude Code identity as the first system block.
+        system.push(json!({"type": "text", "text": CLAUDE_CODE_IDENTITY, "cache_control": {"type": "ephemeral"}}));
+    }
     if let Some(sp) = context.system_prompt.as_ref().filter(|s| !s.is_empty()) {
-        body["system"] = json!([{"type": "text", "text": sp, "cache_control": {"type": "ephemeral"}}]);
+        system.push(json!({"type": "text", "text": sp, "cache_control": {"type": "ephemeral"}}));
+    }
+    if !system.is_empty() {
+        body["system"] = Value::Array(system);
     }
     if !context.tools.is_empty() {
         let mut tools: Vec<Value> = context
             .tools
             .iter()
-            .map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.parameters}))
+            .map(|t| json!({"name": if oauth { to_claude_code_name(&t.name) } else { t.name.clone() }, "description": t.description, "input_schema": t.parameters}))
             .collect();
         if let Some(last) = tools.last_mut() {
             last["cache_control"] = json!({"type": "ephemeral"});
@@ -184,10 +211,23 @@ async fn run(
         .header("content-type", "application/json")
         .header("anthropic-version", "2023-06-01")
         .header("accept", "text/event-stream");
-    if api_key.starts_with("sk-ant-oat") {
-        req = req.header("authorization", format!("Bearer {api_key}"));
+    let oauth = crate::oauth::is_oauth_token(&api_key);
+    let mut betas: Vec<&str> = Vec::new();
+    if oauth {
+        req = req
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("user-agent", format!("claude-cli/{CLAUDE_CODE_VERSION}"))
+            .header("x-app", "cli")
+            .header("anthropic-dangerous-direct-browser-access", "true");
+        betas.extend(["claude-code-20250219", "oauth-2025-04-20"]);
     } else {
         req = req.header("x-api-key", api_key);
+    }
+    if body.get("thinking").is_some() {
+        betas.push("interleaved-thinking-2025-05-14");
+    }
+    if !betas.is_empty() {
+        req = req.header("anthropic-beta", betas.join(","));
     }
     if let Some(h) = &model.headers {
         for (k, v) in h {
@@ -303,7 +343,7 @@ async fn run(
                     "tool_use" => {
                         partial.content.push(Content::ToolCall {
                             id: block["id"].as_str().unwrap_or("").to_string(),
-                            name: block["name"].as_str().unwrap_or("").to_string(),
+                            name: from_claude_code_name(block["name"].as_str().unwrap_or(""), &context.tools),
                             arguments: json!({}),
                             thought_signature: None,
                         });

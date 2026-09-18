@@ -61,6 +61,8 @@ struct ProviderEntry {
 struct Inner {
     models: BTreeMap<String, Model>, // key: provider/id
     providers: HashMap<String, ProviderEntry>,
+    /// pi agent dir used to look up OAuth credentials (`auth.json`, Claude Code login).
+    agent_dir: Option<std::path::PathBuf>,
 }
 
 /// Thread-safe registry of models and provider credentials.
@@ -261,7 +263,61 @@ impl ModelRegistry {
 
     pub fn resolve_api_key(&self, provider: &str) -> Option<String> {
         let inner = self.inner.read().unwrap();
-        self.resolve_api_key_locked(&inner, provider)
+        if let Some(k) = self.resolve_api_key_locked(&inner, provider) {
+            return Some(k);
+        }
+        if provider == "anthropic" {
+            if let Some(dir) = &inner.agent_dir {
+                // Stored OAuth login (pi auth.json or Claude Code); refreshed lazily by resolve_api_key_async.
+                return crate::oauth::find_credential(dir).map(|(c, _)| c.access);
+            }
+        }
+        None
+    }
+
+    /// Enable OAuth credential lookup (pi's `auth.json` and the Claude Code login).
+    pub fn set_agent_dir(&self, dir: std::path::PathBuf) {
+        self.inner.write().unwrap().agent_dir = Some(dir);
+    }
+
+    /// Like `resolve_api_key`, but refreshes an expired OAuth token first.
+    pub async fn resolve_api_key_async(&self, provider: &str) -> Result<Option<String>, String> {
+        let (direct, agent_dir) = {
+            let inner = self.inner.read().unwrap();
+            (self.resolve_api_key_locked(&inner, provider), inner.agent_dir.clone())
+        };
+        if direct.is_some() {
+            return Ok(direct);
+        }
+        if provider == "anthropic" {
+            if let Some(dir) = agent_dir {
+                return crate::oauth::resolve_access_token(&dir).await.map(|r| r.map(|(t, _)| t));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Human-readable description of where a provider's credentials come from.
+    pub fn credential_source(&self, provider: &str) -> Option<String> {
+        let inner = self.inner.read().unwrap();
+        if let Some(entry) = inner.providers.get(provider) {
+            if let Some(k) = &entry.api_key {
+                if resolve_key_spec(k).map(|s| !s.is_empty()).unwrap_or(false) {
+                    return Some(if k.starts_with('$') { format!("env {}", k.trim_start_matches('$')) } else { "models.json".into() });
+                }
+            }
+            if let Some(var) = &entry.env_var {
+                if std::env::var(var).map(|v| !v.is_empty()).unwrap_or(false) {
+                    return Some(format!("env {var}"));
+                }
+            }
+        }
+        if provider == "anthropic" {
+            if let Some(dir) = &inner.agent_dir {
+                return crate::oauth::find_credential(dir).map(|(c, s)| if c.is_expired() { format!("{} (expired)", s.label()) } else { s.label() });
+            }
+        }
+        None
     }
 
     pub fn provider_headers(&self, provider: &str) -> HashMap<String, String> {

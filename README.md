@@ -20,7 +20,8 @@ crates/
 
 ```bash
 cargo build --release
-export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY, or ~/.pi/agent/models.json
+export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY, or ~/.pi/agent/models.json,
+                                      # or nothing: a Claude Code login is picked up automatically
 ./target/release/pirs                 # interactive
 ./target/release/pirs -p "summarize this repo"      # print mode
 ./target/release/pirs -p --mode json "..."          # JSON event stream
@@ -29,6 +30,24 @@ export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY, or ~/.pi/agent/models
 ./target/release/pirs --list-extensions -e ~/.pi/agent/extensions
 ./target/release/pirs -c                            # continue the latest session in this cwd
 ```
+
+### Using the Claude Code login
+
+If you are logged in to Claude Code, pirs uses that OAuth credential for the `anthropic`
+provider when no `ANTHROPIC_API_KEY` is set. Lookup order:
+
+1. `ANTHROPIC_API_KEY` (or a key from `models.json`)
+2. `~/.pi/agent/auth.json` (`anthropic` entry of type `oauth`, as written by pi's `/login`)
+3. `~/.claude/.credentials.json` (Claude Code, honours `CLAUDE_CONFIG_DIR`)
+4. the macOS keychain item "Claude Code-credentials" (macOS may ask you to allow access)
+
+Requests made with an OAuth token follow pi's conventions: Bearer auth, the
+`claude-code-20250219` and `oauth-2025-04-20` beta flags, the Claude Code identity as the first
+system block, and Claude Code tool-name casing on the wire (`Bash`, `Read`, ...) mapped back to
+pirs names. Expired file-based tokens are refreshed through Anthropic's token endpoint and
+written back; a keychain token is only used while it is valid (run `claude` once to refresh it),
+so Claude Code's own login is never rotated behind its back. `pirs --list-models` shows which
+credential source is active.
 
 Offline demo without API keys: the `faux` provider replays a JSON script.
 
@@ -96,7 +115,7 @@ open; AGENTS.md/CLAUDE.md project context; `~/.pi/agent/settings.json` and `mode
 `!`/`!!` shell commands; steering messages while the agent runs; print, JSON and interactive modes.
 
 Not ported: compaction, `/tree` and `/fork` navigation, skills and prompt templates, themes,
-the RPC mode, package installation (`pi install`), OAuth logins, image resizing, and the
+the RPC mode, package installation (`pi install`), the interactive `/login` flow (existing pi or Claude Code logins are reused), image resizing, and the
 full markdown renderer (the TUI prints plain wrapped text).
 
 ## Layout of the interactive mode
