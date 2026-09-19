@@ -189,6 +189,8 @@ struct Ui {
     pending: Vec<Line<'static>>,
     ctrl_c_armed: bool,
     quit: bool,
+    /// Set by /clear and ctrl+l; the main loop clears the terminal and re-homes the viewport.
+    clear_screen: bool,
     tool_args: BTreeMap<String, (String, Value)>,
 }
 
@@ -396,7 +398,8 @@ fn render(ui: &Ui, model_label: &str, area: Rect, buf: &mut Buffer) -> Option<(u
         }
     } else {
         // Live streaming tail.
-        let tail_budget = (VIEWPORT_HEIGHT as usize).saturating_sub(5 + ui.widgets_above.values().map(|w| w.len()).sum::<usize>() + ui.widgets_below.values().map(|w| w.len()).sum::<usize>());
+        // Reserve rows for the editor (1 line + 2 borders), status line, and a spare line.
+        let tail_budget = (VIEWPORT_HEIGHT as usize).saturating_sub(7 + ui.widgets_above.values().map(|w| w.len()).sum::<usize>() + ui.widgets_below.values().map(|w| w.len()).sum::<usize>());
         if !ui.live_thinking.is_empty() && ui.live_text.is_empty() {
             let mut lines = wrap_line(&ui.live_thinking, width.saturating_sub(2));
             let keep = tail_budget.min(lines.len());
@@ -417,18 +420,21 @@ fn render(ui: &Ui, model_label: &str, area: Rect, buf: &mut Buffer) -> Option<(u
                 rows.push(Line::from(Span::styled(strip_ansi(l), dim)));
             }
         }
-        // Editor.
+        // Editor: bounded by thin horizontal rules above and below, like pi's editor.
+        let border = Line::from(Span::styled("─".repeat(width), dim));
         let prompt = "> ";
         let editor_width = width.saturating_sub(prompt.len()).max(4);
         let before = &ui.input[..ui.cursor];
         let cursor_line = before.matches('\n').count();
         let cursor_col = before.rsplit('\n').next().unwrap_or("").width();
+        rows.push(border.clone());
         let editor_start = rows.len();
         for (i, l) in ui.input.split('\n').enumerate() {
             let p = if i == 0 { prompt.to_string() } else { "  ".to_string() };
             rows.push(Line::from(vec![Span::styled(p, accent.add_modifier(Modifier::BOLD)), Span::raw(l.to_string())]));
         }
         cursor = Some(((prompt.len() + cursor_col.min(editor_width)) as u16, (editor_start + cursor_line) as u16));
+        rows.push(border);
         for lines in ui.widgets_below.values() {
             for l in lines {
                 rows.push(Line::from(Span::styled(strip_ansi(l), dim)));
@@ -480,7 +486,7 @@ fn help_text() -> String {
         "  /session              show the session file",
         "  /new                  start a new session",
         "  /reload               reload extensions and context files (AGENTS.md etc.)",
-        "  /clear                clear the screen",
+        "  /clear                clear the screen (context is kept; use /new to start over)",
         "  /exit, /quit          exit",
         "  !cmd  !!cmd           run a shell command (!! keeps it out of the model context)",
         "Keys: enter send · alt+enter newline · esc abort · ctrl+c clear/exit · ctrl+d exit · ↑/↓ history",
@@ -536,6 +542,15 @@ pub async fn run(session: AgentSession, tui: Arc<TuiBackend>, initial: Option<St
     }
 
     loop {
+        // Clear the terminal and move the inline viewport back to the top so ratatui does a
+        // full redraw (a bare Clear(All) leaves its diff buffer thinking the borders are still there).
+        if std::mem::take(&mut ui.clear_screen) {
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All), crossterm::cursor::MoveTo(0, 0));
+            terminal.backend_mut().cursor = Position { x: 0, y: 0 };
+            if let Ok(size) = terminal.size() {
+                let _ = terminal.resize(Rect::new(0, 0, size.width, size.height));
+            }
+        }
         // Flush scrollback.
         if !ui.pending.is_empty() {
             let lines = std::mem::take(&mut ui.pending);
@@ -628,9 +643,7 @@ async fn handle_builtin_command(session: &AgentSession, ui: &mut Ui, text: &str,
     match cmd {
         "help" => ui.push_text(&help_text(), width, info, ""),
         "exit" | "quit" => ui.quit = true,
-        "clear" => {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All), crossterm::cursor::MoveTo(0, 0));
-        }
+        "clear" => ui.clear_screen = true,
         "session" => {
             let f = session.0.session.lock().unwrap().get_session_file().map(|p| p.display().to_string()).unwrap_or_else(|| "(in memory)".into());
             ui.push_text(&format!("session: {f}"), width, info, "");
@@ -778,9 +791,7 @@ async fn handle_key(session: &AgentSession, ui: &mut Ui, key: KeyEvent, width: u
         }
         KeyCode::Char('a') if ctrl => ui.cursor = 0,
         KeyCode::Char('e') if ctrl => ui.cursor = ui.input.len(),
-        KeyCode::Char('l') if ctrl => {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All), crossterm::cursor::MoveTo(0, 0));
-        }
+        KeyCode::Char('l') if ctrl => ui.clear_screen = true,
         KeyCode::Char(c) if !ctrl => {
             let mut b = [0u8; 4];
             ui.insert_str(c.encode_utf8(&mut b));

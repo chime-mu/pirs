@@ -1,1 +1,13 @@
 /target
+
+# local scratch from extension testing
+/fake-remote/
+/test-workspace/
+/secrets/
+/secrets-protection.ts
+/test-secrets-automated.ts
+/test-secrets-extension.sh
+/run-extension-tests.sh
+/PI_INSTALLATION.md
+/RIPGREP_FD_EXPLAINED.md
+/TEST_RESULTS.md

@@ -1,13 +1,59 @@
 # Writing pirs extensions
 
-pirs runs pi extensions: TypeScript modules that export a default function receiving the
-`pi` ExtensionAPI. They can register tools the model can call, add slash commands, intercept
-and block tool calls, transform user input, inject context, prompt the user, and persist state
-in the session. Extensions written for pi work unchanged unless they use the TUI-only APIs
-listed under [Limitations](#limitations).
+This document is the contract for anyone (usually a model) turning a description of desired
+behaviour into a working pirs extension. It is the complete list of what pirs supports. Do not
+use anything not listed here; pi's full reference in
+[pi-extensions-reference.md](pi-extensions-reference.md) describes pi, and where the two
+disagree this file wins.
 
-This document describes what pirs implements. pi's full reference is in
-[pi-extensions-reference.md](pi-extensions-reference.md); where the two disagree, this file wins.
+An extension is a TypeScript module exporting a default function that receives the `pi`
+ExtensionAPI. It can register tools the model can call, add slash commands, intercept and
+block tool calls, transform user input, inject context, prompt the user, show status, and
+persist state in the session.
+
+## Procedure
+
+Given a description of what the extension should do:
+
+1. Map each sentence of the description to one of the [Recipes](#recipes) or, failing that, to
+   an event in [Lifecycle](#lifecycle) or a method in [`pi`](#pi-extensionapi). If a sentence
+   needs something in [Limitations](#limitations), say so and propose the nearest supported
+   alternative instead of writing code that silently no-ops.
+2. Write one file. Keep it as short as the description; do not add configuration, options, or
+   abstractions the description does not ask for.
+3. Follow every item in [Rules](#rules).
+4. Run `pirs --list-extensions -e <file>`. It must load without error and list exactly the
+   tools and commands the description implies. Fix and re-run until it does.
+5. Report the file path, what `--list-extensions` printed, and any part of the description that
+   could not be implemented.
+
+## Rules
+
+- Use only the events, `ctx` members, `pi` methods, and imports listed in this file.
+- Check `ctx.hasUI` before calling any `ctx.ui` dialog (`select`, `confirm`, `input`). In print
+  mode dialogs resolve to `undefined`/`false` immediately; the extension must still behave
+  sensibly.
+- Run programs with `pi.exec(cmd, args, { cwd: ctx.cwd, signal: ctx.signal })`. Never
+  `child_process.spawn`; it throws.
+- Pass `ctx.signal` to `fetch` and `pi.exec` so Esc aborts them.
+- Persist state in `pi.appendEntry` entries or tool result `details`, and rebuild it in
+  `session_start` from `ctx.sessionManager.getBranch()` / `getEntries()`. Module-level variables
+  are lost on `/reload` and restart.
+- Throw an `Error` from tool `execute` to report failure; do not return error text as success.
+- Validate nothing that `parameters` already validates. Do validate anything else before acting.
+- Blocking in `tool_call` is final for that call: the first handler that returns
+  `{ block: true }` wins. Order-sensitive logic between extensions must be stated in the
+  description and implemented by load order (file name or `-e` order), not assumed.
+- `input` transforms chain; each handler sees the previous handler's text. Return nothing when the
+  input is not yours.
+- `before_agent_start` system prompt changes are per run; `context` changes are per request.
+  Neither is persisted. Use `pi.sendMessage` for something the model should remember.
+- After `await ctx.reload()` nothing else runs on this runtime. Make it the last statement.
+- Colours and TUI components render as plain text. Do not depend on layout, colour, or
+  keyboard bindings.
+- Name tools with lowercase letters, digits, and underscores. Give every tool a
+  `promptSnippet` and, when the model needs guidance on when to use it, `promptGuidelines`
+  that name the tool.
 
 ## Quick start
 
@@ -55,7 +101,128 @@ pirs --list-extensions -e ./my-extension.ts
 
 Extensions in `examples/extensions/` (copied from pi) are known to work: `hello.ts`,
 `permission-gate.ts`, `protected-paths.ts`, `dynamic-tools.ts`, `todo.ts`, `git-checkpoint.ts`,
-`input-transform.ts`.
+`input-transform.ts`. `fetch.ts` is a pirs-written tool of realistic size.
+
+## Recipes
+
+Each recipe is the complete idiom for one kind of intent. Combine as many as the description
+needs inside one default export.
+
+**Block or rewrite a tool call** ("refuse X", "ask before Y", "always add flag Z")
+
+```typescript
+pi.on("tool_call", async (event, ctx) => {
+  if (event.toolName !== "bash") return;
+  const cmd = String(event.input.command ?? "");
+  if (/\brm\s+-rf\b/.test(cmd)) {
+    if (!ctx.hasUI) return { block: true, reason: "rm -rf is not allowed in print mode" };
+    const ok = await ctx.ui.confirm("Destructive command", cmd);
+    if (!ok) return { block: true, reason: "Blocked by user" };
+  }
+  // rewrite: event.input.command = cmd + " --dry-run";
+});
+```
+
+For path-based rules (`edit`, `write`, `read`) check `String(event.input.path ?? "")` resolved
+against `ctx.cwd`.
+
+**Transform or consume user input** ("expand `!{cmd}`", "treat lines starting with ? as ...")
+
+```typescript
+pi.on("input", async (event, ctx) => {
+  if (!event.text.startsWith("?")) return;                 // not ours
+  return { action: "transform", text: "Explain briefly: " + event.text.slice(1) };
+  // or: return { action: "handled" };                     // consumed, no model call
+});
+```
+
+**Add to the system prompt or inject context** ("tell the model about X on every run")
+
+```typescript
+pi.on("before_agent_start", async (event, ctx) => {
+  const rules = readRules(ctx.cwd);                          // your own helper
+  if (!rules) return;
+  return { systemPrompt: event.systemPrompt + "\n\n" + rules };
+});
+```
+
+To show the user what was injected as well, return
+`{ message: { customType: "my-ext", content: rules, display: true } }` instead.
+
+**Show something in the status line** ("show the git branch", "show a counter")
+
+```typescript
+async function refresh(ctx) {
+  const r = await pi.exec("git", ["branch", "--show-current"], { cwd: ctx.cwd });
+  ctx.ui.setStatus("branch", r.code === 0 ? r.stdout.trim() : undefined);
+}
+pi.on("session_start", (_e, ctx) => refresh(ctx));
+pi.on("agent_end", (_e, ctx) => refresh(ctx));
+```
+
+Use `ctx.ui.setWidget(key, lines)` for more than one line.
+
+**Add a slash command** ("`/foo args` does ...")
+
+```typescript
+pi.registerCommand("foo", {
+  description: "What /foo does",
+  handler: async (args, ctx) => {
+    await ctx.waitForIdle();
+    ctx.ui.notify(`foo ${args}`, "info");
+  },
+});
+```
+
+**Give the model a new tool** — see [Custom tools](#custom-tools).
+
+**Remember something across turns and restarts** ("track todos", "remember decisions")
+
+```typescript
+let items: string[] = [];
+pi.on("session_start", (_e, ctx) => {
+  items = [];
+  for (const e of ctx.sessionManager.getBranch()) {
+    if (e.type === "custom" && e.customType === "my-ext:item") items.push(e.data.text);
+  }
+});
+function add(text: string) { items.push(text); pi.appendEntry("my-ext:item", { text }); }
+```
+
+**Do something when a run finishes** ("commit after each turn", "notify when done")
+
+```typescript
+pi.on("agent_end", async (_event, ctx) => {
+  await pi.exec("git", ["add", "-A"], { cwd: ctx.cwd });
+  await pi.exec("git", ["commit", "-qm", "pirs checkpoint"], { cwd: ctx.cwd });
+});
+```
+
+**Send the model a message from outside** ("when file X changes, tell the model")
+
+```typescript
+pi.sendMessage(
+  { customType: "my-ext", content: "File X changed:\n" + contents, display: true },
+  { deliverAs: "followUp", triggerTurn: true },
+);
+```
+
+## Composing descriptions
+
+Several descriptions can be implemented as one file or as several; behaviour is the same because
+all handlers for an event run in load order. When combining:
+
+- Independent intents (a tool plus a status line, a command plus a guard) simply coexist. Put
+  them in one default export or in separate files; nothing else is needed.
+- Two intents on the same event must be checked for interaction. `tool_call`: the first block
+  wins, so put the stricter rule first. `input`: transforms chain, so order determines what
+  the second one sees. `before_agent_start`: later handlers see earlier `systemPrompt`
+  edits. If the descriptions do not say which comes first, ask or pick the safer order and
+  state it in the report.
+- Two intents that both want `setStatus` must use different keys. Two that want the same
+  tool name conflict; the later registration replaces the earlier one.
+- Shared state between files goes through `pi.events` (in-process) or `pi.appendEntry`
+  (persisted), never through module imports of each other's internals.
 
 ## Locations and loading
 
