@@ -1,6 +1,6 @@
 # pirs status
 
-Last updated: 2026-09-18.
+Last updated: 2026-09-20.
 
 pirs is a Rust port of [pi](https://github.com/earendil-works/pi). The goal of the first
 milestone was a working coding agent with pi's architecture and, above all, proof that pi's
@@ -162,6 +162,9 @@ TypeScript extension model can run from a Rust host. Both are done.
   `sweep` example; those tests skip when it is absent.
 
 ## Suggested next steps
+A redesign is under discussion in `docs/design/adaptable.md` (loop server + protocol + DSL,
+components behind protocols); if adopted, its phase 0 supersedes this list. See `HANDOFF.md`.
+
 1. Live-test the OpenAI provider with a real key; try thinking levels and tool-heavy sessions
    against Anthropic.
 2. Compaction, then `/tree` and `/fork` in the TUI.

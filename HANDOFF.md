@@ -1,7 +1,41 @@
 # Handoff
 
-Written 2026-09-18 at shutdown. Read this first, then `STATUS.md` for the feature inventory
-and `docs/extensions.md` for the extension API.
+Updated 2026-09-20. Read this first, then `docs/design/adaptable.md` if you are continuing
+the design discussion, `STATUS.md` for the feature inventory, and `docs/extensions.md` for
+the current (pi-compatible) extension API.
+
+## Design discussion in progress (2026-09-19/20)
+
+`docs/design/adaptable.md` is the live document: a proposal to turn pirs from a pi port into
+a headless loop server plus protocol, a declarative policy DSL, and clients. It is still a
+draft, but the last two sessions settled these points; do not reopen them without a reason:
+
+- **Architecture is components behind protocols.** Loop server (core; `pi-ai` stays inside
+  it, on the server side of every boundary), extension executables, an optional and separate
+  pty server (tmux until then, never inside the loop server), and the TUI as one client.
+- **No security checks inside the loop.** The `[[guard]]` slot and `tool_call` handler were
+  removed on purpose after discussing sandbox escapes; an in-process check is a smokescreen.
+  Containment is a boundary around the *server* (container, VM, ssh); see "Containment".
+- **Bet #1 is grounded in Claude Code hooks/permissions/CLAUDE.md, not pi's examples**,
+  which are only an expressiveness corpus.
+- **TUI = sidebar of agents across servers + pages** (`agent`, `file` via read-only
+  `fs.read`/`fs.changed`, later `terminal`). Page arrangement (splits, tabs, saved layouts —
+  herdr's window features) is the client's business, buildable any time, not specified.
+  Editing is `$EDITOR` shell-out or the agent. The user wants those window features to remain
+  buildable; the doc must not foreclose them.
+- **Crate carve-up and mechanical checks** (`pirs-protocol`, `pirs-client`, `cargo metadata`
+  edge test, `cargo-deny` wrappers with terminal-emulator crates banned, per-crate clippy
+  lints, protocol schema snapshot) are part of phase 0.
+
+Nothing from the proposal is implemented. Next step, once the user accepts the draft, is
+phase 0: `docs/protocol.md`, `docs/dsl.md`, the crate carve-up and the two tests. The
+"Suggested next work" list at the bottom predates this and assumes the pi-port direction.
+
+## Toolchain
+
+This machine had no Rust toolchain; `rust@stable` (rustc 1.98.1) was installed globally with
+`mise use -g rust@stable` on 2026-09-19. `cargo` is at `~/.cargo/bin/cargo`; a fresh shell
+needs `mise` activated (or `~/.cargo/bin` on `PATH`). `cargo build --release` is clean.
 
 ## Where things stand
 
