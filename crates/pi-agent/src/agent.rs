@@ -195,12 +195,10 @@ impl Agent {
                                 s.streaming_message = Some(message.clone());
                             }
                         }
-                        AgentEvent::MessageEnd { message } => {
-                            if let AgentMessage::Assistant(a) = message {
-                                s.streaming_message = None;
-                                if matches!(a.stop_reason, StopReason::Error | StopReason::Aborted) {
-                                    s.error_message = a.error_message.clone();
-                                }
+                        AgentEvent::MessageEnd { message: AgentMessage::Assistant(a) } => {
+                            s.streaming_message = None;
+                            if matches!(a.stop_reason, StopReason::Error | StopReason::Aborted) {
+                                s.error_message = a.error_message.clone();
                             }
                         }
                         AgentEvent::ToolExecutionStart { tool_call_id, .. } => {

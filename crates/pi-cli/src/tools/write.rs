@@ -11,12 +11,12 @@ use tokio_util::sync::CancellationToken;
 use super::arg_str;
 use super::path_utils::resolve_to_cwd;
 
-pub struct WriteTool {
+pub(crate) struct WriteTool {
     cwd: PathBuf,
 }
 
 impl WriteTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }

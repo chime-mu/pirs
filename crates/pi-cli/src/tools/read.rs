@@ -18,12 +18,12 @@ use super::{arg_str, arg_usize};
 const IMAGE_TYPE_SNIFF_BYTES: usize = 4100;
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-pub struct ReadTool {
+pub(crate) struct ReadTool {
     cwd: PathBuf,
 }
 
 impl ReadTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }
@@ -101,7 +101,7 @@ fn is_bmp(buf: &[u8]) -> bool {
 }
 
 /// Detect a supported image MIME type from the leading bytes of a file.
-pub fn detect_supported_image_mime_type(buf: &[u8]) -> Option<&'static str> {
+pub(crate) fn detect_supported_image_mime_type(buf: &[u8]) -> Option<&'static str> {
     if buf.starts_with(&[0xff, 0xd8, 0xff]) {
         return if buf.get(3) == Some(&0xf7) { None } else { Some("image/jpeg") };
     }

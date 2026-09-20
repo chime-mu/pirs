@@ -22,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub enum UiEvent {
-    Agent(AgentEvent),
+pub(crate) enum UiEvent {
+    Agent(Box<AgentEvent>),
     Notify { message: String, kind: String },
     Status { key: String, text: Option<String> },
     Widget { key: String, lines: Option<Vec<String>>, placement: Option<String> },
@@ -37,7 +37,7 @@ pub enum UiEvent {
 }
 
 #[async_trait]
-pub trait UiBackend: Send + Sync {
+pub(crate) trait UiBackend: Send + Sync {
     fn mode(&self) -> &'static str;
     fn has_ui(&self) -> bool;
     fn emit(&self, event: UiEvent);
@@ -62,7 +62,7 @@ pub trait UiBackend: Send + Sync {
 // Session
 // ---------------------------------------------------------------------------
 
-pub struct SessionOptions {
+pub(crate) struct SessionOptions {
     pub cwd: PathBuf,
     pub settings: Settings,
     pub registry: ModelRegistry,
@@ -79,7 +79,7 @@ pub struct SessionOptions {
 /// Where extensions come from. Kept so `/reload` can re-discover them (new files in
 /// `.pi/extensions/` are picked up, deleted ones disappear).
 #[derive(Clone, Debug, Default)]
-pub struct ExtensionSources {
+pub(crate) struct ExtensionSources {
     /// Auto-discover from `~/.pi/agent/extensions`, `.pi/extensions`, and settings.
     pub discover: bool,
     /// Explicit `-e` paths (files, extension directories, or roots), absolute.
@@ -87,7 +87,7 @@ pub struct ExtensionSources {
 }
 
 impl ExtensionSources {
-    pub fn resolve(&self, cwd: &Path, settings: &Settings) -> Vec<PathBuf> {
+    pub(crate) fn resolve(&self, cwd: &Path, settings: &Settings) -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = Vec::new();
         if self.discover {
             paths.extend(pi_ext::discover_extensions(&crate::settings::extension_roots(cwd)));
@@ -98,7 +98,7 @@ impl ExtensionSources {
                 // A directory is one extension (`index.ts`); otherwise treat it as a root of extensions.
                 match ["index.ts", "index.js", "index.mjs"].iter().map(|i| p.join(i)).find(|f| f.is_file()) {
                     Some(idx) => paths.push(idx),
-                    None => paths.extend(pi_ext::discover_extensions(&[p.clone()])),
+                    None => paths.extend(pi_ext::discover_extensions(std::slice::from_ref(p))),
                 }
             } else {
                 paths.push(p.clone());
@@ -112,12 +112,12 @@ impl ExtensionSources {
 
 /// Outcome of loading (or reloading) the extension set.
 #[derive(Debug, Default)]
-pub struct LoadReport {
+pub(crate) struct LoadReport {
     pub loaded: Vec<pi_ext::LoadedExtension>,
     pub failures: Vec<(PathBuf, String)>,
 }
 
-pub struct Inner {
+pub(crate) struct Inner {
     pub cwd: PathBuf,
     pub agent: Agent,
     pub session: Mutex<SessionManager>,
@@ -146,10 +146,10 @@ pub struct Inner {
 }
 
 #[derive(Clone)]
-pub struct AgentSession(pub Arc<Inner>);
+pub(crate) struct AgentSession(pub Arc<Inner>);
 
 impl AgentSession {
-    pub async fn new(opts: SessionOptions) -> anyhow::Result<Self> {
+    pub(crate) async fn new(opts: SessionOptions) -> anyhow::Result<Self> {
         let agent = Agent::new(opts.model.clone(), Arc::new(NoHooks));
         agent.set_thinking_level(opts.thinking_level);
         agent.with_state(|s| s.tool_execution = opts.tool_execution);
@@ -215,7 +215,7 @@ impl AgentSession {
 
     /// Start the extension host and load the extensions described by `sources`.
     /// The sources are remembered for `reload`.
-    pub async fn load_extensions(&self, sources: ExtensionSources) -> LoadReport {
+    pub(crate) async fn load_extensions(&self, sources: ExtensionSources) -> LoadReport {
         *self.0.extension_sources.lock().unwrap() = sources.clone();
         self.0.start_host(&sources).await
     }
@@ -225,7 +225,7 @@ impl AgentSession {
     /// `session_start(reload)` and `resources_discover(reload)` to the new one. Context files
     /// (`AGENTS.md` etc.) are re-read as well. A fresh QuickJS runtime is used so changed
     /// modules (including transitive imports) are re-evaluated and stale timers die.
-    pub async fn reload(&self) -> Result<LoadReport, String> {
+    pub(crate) async fn reload(&self) -> Result<LoadReport, String> {
         let inner = &self.0;
         if inner.running.load(Ordering::SeqCst) {
             return Err("cannot reload while the agent is running".into());
@@ -238,39 +238,39 @@ impl AgentSession {
         Ok(report)
     }
 
-    pub async fn emit_session_start(&self, reason: &str) {
+    pub(crate) async fn emit_session_start(&self, reason: &str) {
         self.0.dispatch("session_start", json!({"type": "session_start", "reason": reason}), None).await;
         let discover_reason = if reason == "startup" { "startup" } else { "reload" };
         self.0.dispatch("resources_discover", json!({"type": "resources_discover", "cwd": self.0.cwd.to_string_lossy(), "reason": discover_reason}), None).await;
     }
 
-    pub async fn shutdown(&self, reason: &str) {
+    pub(crate) async fn shutdown(&self, reason: &str) {
         self.0.dispatch("session_shutdown", json!({"type": "session_shutdown", "reason": reason}), None).await;
         if let Some(h) = self.0.host() {
             h.shutdown();
         }
     }
 
-    pub fn abort(&self) {
+    pub(crate) fn abort(&self) {
         self.0.agent.abort();
     }
 
-    pub async fn wait_for_idle(&self) {
+    pub(crate) async fn wait_for_idle(&self) {
         self.0.wait_for_idle().await
     }
 
-    pub fn commands(&self) -> Vec<CommandInfo> {
+    pub(crate) fn commands(&self) -> Vec<CommandInfo> {
         self.0.commands.lock().unwrap().clone()
     }
 
-    pub fn extension_errors(&self) -> Vec<ExtensionError> {
+    pub(crate) fn extension_errors(&self) -> Vec<ExtensionError> {
         self.0.extension_errors.lock().unwrap().clone()
     }
 
     /// Handle user input: extension commands, `!` bash, `input` event, then a
     /// full agent run. While the agent is running the text is queued as a
     /// steering (or follow-up) message instead.
-    pub async fn submit(&self, text: String, images: Vec<Content>, deliver_as: Option<&str>) -> anyhow::Result<()> {
+    pub(crate) async fn submit(&self, text: String, images: Vec<Content>, deliver_as: Option<&str>) -> anyhow::Result<()> {
         let inner = self.0.clone();
         if inner.running.load(Ordering::SeqCst) {
             let msg = user_message(&text, &images);
@@ -283,11 +283,11 @@ impl AgentSession {
         inner.handle_input(text, images, "interactive").await
     }
 
-    pub fn current_model(&self) -> Option<Model> {
+    pub(crate) fn current_model(&self) -> Option<Model> {
         self.0.agent.model()
     }
 
-    pub async fn set_model(&self, model: Model, source: &str) -> bool {
+    pub(crate) async fn set_model(&self, model: Model, source: &str) -> bool {
         let previous = self.0.agent.model();
         self.0.agent.set_model(model.clone());
         let _ = self.0.session.lock().unwrap().append_model_change(&model.provider, &model.id);
@@ -297,14 +297,14 @@ impl AgentSession {
         true
     }
 
-    pub fn set_thinking_level(&self, level: ThinkingLevel) {
+    pub(crate) fn set_thinking_level(&self, level: ThinkingLevel) {
         self.0.agent.set_thinking_level(level);
         let _ = self.0.session.lock().unwrap().append_thinking_level_change(level.as_str());
     }
 
 }
 
-pub fn reload_summary(report: &LoadReport) -> String {
+pub(crate) fn reload_summary(report: &LoadReport) -> String {
     let n = report.loaded.len();
     let mut s = format!("reloaded {n} extension{}", if n == 1 { "" } else { "s" });
     if !report.failures.is_empty() {
@@ -313,7 +313,7 @@ pub fn reload_summary(report: &LoadReport) -> String {
     s
 }
 
-pub fn trace(msg: &str) {
+pub(crate) fn trace(msg: &str) {
     if std::env::var_os("PIRS_TRACE").is_some() {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() % 100000).unwrap_or(0);
         eprintln!("[trace {t}] {msg}");
@@ -645,12 +645,12 @@ impl Inner {
                 if persist {
                     let _ = self.session.lock().unwrap().append_message(message.clone());
                 }
-                self.ui.emit(UiEvent::Agent(AgentEvent::MessageEnd { message: message.clone() }));
+                self.ui.emit(UiEvent::Agent(Box::new(AgentEvent::MessageEnd { message: message.clone() })));
                 return;
             }
             other => other,
         };
-        self.ui.emit(UiEvent::Agent(event.clone()));
+        self.ui.emit(UiEvent::Agent(Box::new(event.clone())));
         let name = serde_json::to_value(&event).ok().and_then(|v| v["type"].as_str().map(|s| s.to_string())).unwrap_or_default();
         // Extensions get every lifecycle event except the high-frequency
         // message_update stream unless a handler is registered.
@@ -1083,7 +1083,7 @@ impl Inner {
                     // Idle without triggering a turn: append to context and persist.
                     self.agent.append_message(msg.clone());
                     let _ = self.session.lock().unwrap().append_message(msg.clone());
-                    self.ui.emit(UiEvent::Agent(AgentEvent::MessageEnd { message: msg }));
+                    self.ui.emit(UiEvent::Agent(Box::new(AgentEvent::MessageEnd { message: msg })));
                 }
             }
         }
@@ -1092,7 +1092,7 @@ impl Inner {
 
 impl AgentSession {
     /// Render a tool call through the extension's `renderCall` (if any).
-    pub async fn render_tool_call(&self, name: &str, args: &Value, width: usize) -> Option<Vec<String>> {
+    pub(crate) async fn render_tool_call(&self, name: &str, args: &Value, width: usize) -> Option<Vec<String>> {
         let host = self.0.host()?;
         if !self.0.extension_tools.lock().unwrap().iter().any(|t| t.name == name && t.has_render_call) {
             return None;
@@ -1100,14 +1100,14 @@ impl AgentSession {
         host.render_tool_call(name, args.clone(), width).await
     }
     /// Render a tool result through the extension's `renderResult` (if any).
-    pub async fn render_tool_result(&self, name: &str, result: &Value, expanded: bool, width: usize) -> Option<Vec<String>> {
+    pub(crate) async fn render_tool_result(&self, name: &str, result: &Value, expanded: bool, width: usize) -> Option<Vec<String>> {
         let host = self.0.host()?;
         if !self.0.extension_tools.lock().unwrap().iter().any(|t| t.name == name && t.has_render_result) {
             return None;
         }
         host.render_tool_result(name, result.clone(), expanded, width).await
     }
-    pub async fn render_message(&self, custom_type: &str, message: &Value, width: usize) -> Option<Vec<String>> {
+    pub(crate) async fn render_message(&self, custom_type: &str, message: &Value, width: usize) -> Option<Vec<String>> {
         let host = self.0.host()?;
         host.render_message(custom_type, message.clone(), width).await
     }
@@ -1115,7 +1115,7 @@ impl AgentSession {
 
 /// Pick the startup model: explicit spec, settings, then the first model
 /// whose provider has credentials.
-pub fn resolve_startup_model(registry: &ModelRegistry, spec: Option<&str>, settings: &Settings) -> anyhow::Result<Model> {
+pub(crate) fn resolve_startup_model(registry: &ModelRegistry, spec: Option<&str>, settings: &Settings) -> anyhow::Result<Model> {
     if let Some(s) = spec {
         return registry.find(s).ok_or_else(|| anyhow::anyhow!("Unknown model '{s}'. Use --list-models to see the catalog."));
     }

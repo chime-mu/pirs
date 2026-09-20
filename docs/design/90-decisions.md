@@ -336,3 +336,14 @@ slot payload as JSON on stdin; what a shell-string `[[tool]]` with `params` rece
 unspecified. Proposed: every called process gets the JSON payload on stdin, and a shell
 string additionally gets each top-level field as an environment variable (`PIRS_ARG_url`)
 and `$name` interpolation, so a one-liner never has to parse JSON.
+
+**D-38 · proposed · 2026-09-21 · `loop.list` takes an optional `cwd` and returns stored conversations.**
+Recorded by the orchestrator during phase 0. S2 says the UI "has a way to open past
+conversations" and D-28 says the sidebar "offers past conversations separately"; the plan's
+`pirs --list` prints the conversations in the cwd and `--continue <name-or-id>` picks one.
+Nothing in the request table can list conversations on disk: `loop.list` lists running loops
+and `fs.list` needs a server path the client must not construct (D-31). Rather than add a
+request, `loop.list { cwd? }` returns `{ loops, conversations }`, where `conversations` is
+the server's list of stored conversations for `cwd` (id, name, cwd, path, updated) and is
+empty when `cwd` is absent. `loop.create { session }` continues one by id. Evidence: the
+phase 1 acceptance script (`pirs --list` shows two conversations) cannot be written otherwise.

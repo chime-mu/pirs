@@ -25,8 +25,7 @@ impl<S> SseStream<S> {
 
     fn drain_buffer(&mut self) {
         // Events are separated by a blank line. Handle both \n\n and \r\n\r\n.
-        loop {
-            let Some(pos) = find_event_boundary(&self.buffer) else { break };
+        while let Some(pos) = find_event_boundary(&self.buffer) {
             let (raw, sep_len) = pos;
             let chunk = self.buffer.drain(..raw + sep_len).collect::<Vec<u8>>();
             let text = String::from_utf8_lossy(&chunk[..raw]).to_string();

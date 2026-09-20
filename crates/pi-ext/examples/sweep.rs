@@ -18,7 +18,7 @@ impl HostCallbacks for Quiet {
 async fn main() {
     let roots: Vec<std::path::PathBuf> = std::env::args().skip(1).map(Into::into).collect();
     let mut files = Vec::new();
-    for r in &roots { if r.is_file() { files.push(r.clone()); } else { files.extend(discover_extensions(&[r.clone()])); } }
+    for r in &roots { if r.is_file() { files.push(r.clone()); } else { files.extend(discover_extensions(std::slice::from_ref(r))); } }
     let mut ok = 0; let mut failed = Vec::new();
     for f in &files {
         let host = ExtensionHost::spawn(Arc::new(Quiet), HostConfig::new(std::env::current_dir().unwrap())).await.unwrap();

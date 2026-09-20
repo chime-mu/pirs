@@ -1,2 +1,2 @@
-pub mod interactive;
-pub mod print;
+pub(crate) mod interactive;
+pub(crate) mod print;

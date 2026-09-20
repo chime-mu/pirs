@@ -1,5 +1,7 @@
 //! pi-ai: unified multi-provider LLM streaming API (Rust port of `@earendil-works/pi-ai`).
 
+#![deny(unreachable_pub)]
+
 pub mod anthropic;
 pub mod faux;
 pub mod json_salvage;

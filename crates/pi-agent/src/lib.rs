@@ -1,6 +1,8 @@
 //! pi-agent: agent runtime with tool calling and state management
 //! (Rust port of `@earendil-works/pi-agent-core`).
 
+#![deny(unreachable_pub)]
+
 pub mod agent;
 pub mod agent_loop;
 pub mod types;

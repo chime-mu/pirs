@@ -5,6 +5,8 @@
 //! `typebox`, `@earendil-works/pi-*`, and common `node:*` imports resolve to
 //! embedded shims, and the `pi` API object is provided by `js/runtime.js`.
 
+#![deny(unreachable_pub)]
+
 pub mod host;
 pub mod loader;
 pub mod strip;

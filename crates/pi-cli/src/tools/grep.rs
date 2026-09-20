@@ -19,12 +19,12 @@ use super::{arg_bool, arg_str, arg_usize};
 
 const DEFAULT_LIMIT: usize = 100;
 
-pub struct GrepTool {
+pub(crate) struct GrepTool {
     cwd: PathBuf,
 }
 
 impl GrepTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }

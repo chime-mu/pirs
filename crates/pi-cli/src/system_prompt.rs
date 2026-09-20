@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ContextFile {
+pub(crate) struct ContextFile {
     pub path: String,
     pub content: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct BuildSystemPromptOptions {
+pub(crate) struct BuildSystemPromptOptions {
     pub custom_prompt: Option<String>,
     pub force_system_prompt: Option<String>,
     pub selected_tools: Vec<String>,
@@ -64,7 +64,7 @@ fn build_rules(selected: &[String], tool_guidelines: &HashMap<String, Vec<String
 
 /// Ordered prompt sections; `preamble` is untagged, everything else is
 /// wrapped in a tag of the same name.
-pub fn build_system_prompt_sections(o: &BuildSystemPromptOptions) -> Vec<(String, String)> {
+pub(crate) fn build_system_prompt_sections(o: &BuildSystemPromptOptions) -> Vec<(String, String)> {
     let mut sections: Vec<(String, String)> = Vec::new();
     if let Some(custom) = &o.custom_prompt {
         sections.push(("preamble".into(), custom.clone()));
@@ -96,7 +96,7 @@ pub fn build_system_prompt_sections(o: &BuildSystemPromptOptions) -> Vec<(String
         .collect()
 }
 
-pub fn build_system_prompt(o: &BuildSystemPromptOptions) -> String {
+pub(crate) fn build_system_prompt(o: &BuildSystemPromptOptions) -> String {
     if let Some(forced) = &o.force_system_prompt {
         return forced.clone();
     }
@@ -105,7 +105,7 @@ pub fn build_system_prompt(o: &BuildSystemPromptOptions) -> String {
 
 /// Where the pirs docs live: `PIRS_DOCS_DIR`, or the source tree this binary
 /// was built from (workspace root of `crates/pi-cli`), or `~/.pi/agent/pirs`.
-pub fn docs_root() -> Option<PathBuf> {
+pub(crate) fn docs_root() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(d) = std::env::var_os("PIRS_DOCS_DIR") {
         candidates.push(PathBuf::from(d));
@@ -148,7 +148,7 @@ fn find_context_file(dir: &Path) -> Option<PathBuf> {
 
 /// Global `~/.pi/agent/AGENTS.md`, then every AGENTS.md / CLAUDE.md from the
 /// filesystem root down to `cwd` (parents first).
-pub fn load_context_files(cwd: &Path) -> Vec<ContextFile> {
+pub(crate) fn load_context_files(cwd: &Path) -> Vec<ContextFile> {
     let mut out = Vec::new();
     if let Some(global) = find_context_file(&crate::session::get_agent_dir()) {
         if let Ok(content) = std::fs::read_to_string(&global) {

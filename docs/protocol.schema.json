@@ -1,0 +1,2917 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProtocolSchema",
+  "description": "Every wire type, referenced once, so that `schema_for!(ProtocolSchema)`\ncovers the whole protocol. `docs/protocol.schema.json` is this type's\nschema; the `$defs` are the protocol.\n\nNot a message: nothing serialises a `ProtocolSchema`. Its fields are grouped\nby the three tables of `30-protocol.md` — events, slots, requests — plus\nthe envelope and the shared types.",
+  "type": "object",
+  "properties": {
+    "by_ref": {
+      "description": "A by-reference payload.",
+      "$ref": "#/$defs/Ref"
+    },
+    "dsl_check_result": {
+      "description": "Result of `dsl.check`.",
+      "$ref": "#/$defs/DslCheckResult"
+    },
+    "empty_result": {
+      "description": "Result of every other request.",
+      "$ref": "#/$defs/Empty"
+    },
+    "envelope": {
+      "description": "One line on the wire.",
+      "$ref": "#/$defs/Envelope"
+    },
+    "event": {
+      "description": "Server → observers, tagged by `method`.",
+      "$ref": "#/$defs/Event"
+    },
+    "fs_list_result": {
+      "description": "Result of `fs.list`.",
+      "$ref": "#/$defs/FsListResult"
+    },
+    "fs_read_result": {
+      "description": "Result of `fs.read`.",
+      "$ref": "#/$defs/FsReadResult"
+    },
+    "hello_result": {
+      "description": "Result of `hello`.",
+      "$ref": "#/$defs/HelloResult"
+    },
+    "input_payload": {
+      "description": "Server → handler `input` request params.",
+      "$ref": "#/$defs/InputPayload"
+    },
+    "input_reply": {
+      "description": "Reply to `input`.",
+      "$ref": "#/$defs/InputReply"
+    },
+    "loop_attach_result": {
+      "description": "Result of `loop.attach`.",
+      "$ref": "#/$defs/LoopAttachResult"
+    },
+    "loop_create_result": {
+      "description": "Result of `loop.create`.",
+      "$ref": "#/$defs/LoopInfo"
+    },
+    "loop_list_result": {
+      "description": "Result of `loop.list`.",
+      "$ref": "#/$defs/LoopListResult"
+    },
+    "loop_reload_result": {
+      "description": "Result of `loop.reload`.",
+      "$ref": "#/$defs/LoopReloadResult"
+    },
+    "loop_wait_result": {
+      "description": "Result of `loop.wait`.",
+      "$ref": "#/$defs/LoopWaitResult"
+    },
+    "message": {
+      "description": "A conversation message.",
+      "$ref": "#/$defs/Message"
+    },
+    "on_reload_payload": {
+      "description": "Server → handler `on.reload` request params.",
+      "$ref": "#/$defs/OnReloadPayload"
+    },
+    "on_run_end_payload": {
+      "description": "Server → handler `on.run_end` request params.",
+      "$ref": "#/$defs/LoopRunEndEvent"
+    },
+    "on_start_payload": {
+      "description": "Server → handler `on.start` request params.",
+      "$ref": "#/$defs/OnStartPayload"
+    },
+    "on_tool_result_payload": {
+      "description": "Server → handler `on.tool_result` request params.",
+      "$ref": "#/$defs/OnToolResultPayload"
+    },
+    "on_turn_end_payload": {
+      "description": "Server → handler `on.turn_end` request params.",
+      "$ref": "#/$defs/LoopTurnEndEvent"
+    },
+    "prompt_payload": {
+      "description": "Server → handler `prompt` request params.",
+      "$ref": "#/$defs/PromptPayload"
+    },
+    "prompt_reply": {
+      "description": "Reply to `prompt`.",
+      "$ref": "#/$defs/PromptReply"
+    },
+    "request": {
+      "description": "Client → server, tagged by `method`.",
+      "$ref": "#/$defs/Request"
+    },
+    "rpc_error": {
+      "description": "Failure member of a response.",
+      "$ref": "#/$defs/RpcError"
+    },
+    "server_path": {
+      "description": "An opaque server path.",
+      "$ref": "#/$defs/ServerPath"
+    },
+    "slot": {
+      "description": "A slot name.",
+      "$ref": "#/$defs/Slot"
+    },
+    "tool_call_payload": {
+      "description": "Server → handler `tool.<name>` request params.",
+      "$ref": "#/$defs/ToolCallPayload"
+    },
+    "tool_reply": {
+      "description": "Reply to `tool.<name>`.",
+      "$ref": "#/$defs/ToolReply"
+    },
+    "tool_result_payload": {
+      "description": "Server → handler `tool_result` request params.",
+      "$ref": "#/$defs/ToolResultPayload"
+    },
+    "tool_result_reply": {
+      "description": "Reply to `tool_result`.",
+      "$ref": "#/$defs/ToolResultReply"
+    }
+  },
+  "required": [
+    "envelope",
+    "rpc_error",
+    "request",
+    "hello_result",
+    "loop_create_result",
+    "loop_list_result",
+    "loop_attach_result",
+    "loop_wait_result",
+    "fs_list_result",
+    "fs_read_result",
+    "loop_reload_result",
+    "dsl_check_result",
+    "empty_result",
+    "event",
+    "slot",
+    "input_payload",
+    "input_reply",
+    "prompt_payload",
+    "prompt_reply",
+    "tool_result_payload",
+    "tool_result_reply",
+    "tool_call_payload",
+    "tool_reply",
+    "on_start_payload",
+    "on_turn_end_payload",
+    "on_run_end_payload",
+    "on_tool_result_payload",
+    "on_reload_payload",
+    "message",
+    "by_ref",
+    "server_path"
+  ],
+  "$defs": {
+    "AssistantMessage": {
+      "description": "What the model said, with the provider bookkeeping the session format keeps.",
+      "type": "object",
+      "properties": {
+        "api": {
+          "description": "The provider API used, e.g. `anthropic-messages`, `openai-completions`, `faux`.",
+          "type": "string"
+        },
+        "content": {
+          "description": "Text, thinking and tool-call blocks, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Content"
+          }
+        },
+        "errorMessage": {
+          "description": "Error text when `stopReason` is `error` or `aborted`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "The model id, e.g. `claude-sonnet-4-5`.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider name, e.g. `anthropic`.",
+          "type": "string"
+        },
+        "rawStopReason": {
+          "description": "The provider's own stop reason string, unmapped.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "responseId": {
+          "description": "The provider's response id, when it gives one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stopReason": {
+          "description": "Why the model stopped.",
+          "$ref": "#/$defs/StopReason"
+        },
+        "timestamp": {
+          "description": "Unix milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "usage": {
+          "description": "Token usage and cost.",
+          "$ref": "#/$defs/Usage",
+          "default": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "cost": {
+              "cacheRead": 0.0,
+              "cacheWrite": 0.0,
+              "input": 0.0,
+              "output": 0.0,
+              "total": 0.0
+            },
+            "input": 0,
+            "output": 0,
+            "totalTokens": 0
+          }
+        }
+      },
+      "required": [
+        "content",
+        "api",
+        "provider",
+        "model",
+        "stopReason"
+      ]
+    },
+    "ChangedBy": {
+      "description": "What wrote the file an `fs.changed` reports.",
+      "oneOf": [
+        {
+          "description": "One of the loop's tools wrote it during a tool call.",
+          "type": "string",
+          "const": "tool"
+        },
+        {
+          "description": "The write was noticed at the end of the turn.",
+          "type": "string",
+          "const": "turn"
+        }
+      ]
+    },
+    "CommandInfo": {
+      "description": "A slash command the loop's policy defines: an `input` match with a name\nand a description (D-13), so a UI can list and complete it.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "One line of help.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name, without the leading `/`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "Content": {
+      "description": "One block of message content.",
+      "oneOf": [
+        {
+          "description": "Plain text. In an assistant message this is what the model said; in a\nuser or tool-result message, what it reads.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The text.",
+              "type": "string"
+            },
+            "textSignature": {
+              "description": "Provider signature over the text, when the provider requires it to\nbe sent back verbatim.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "An image, base64-encoded.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "description": "Base64 image data.",
+              "type": "string"
+            },
+            "mimeType": {
+              "description": "MIME type, e.g. `image/png`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "mimeType"
+          ]
+        },
+        {
+          "description": "Model reasoning, when the model exposes it.",
+          "type": "object",
+          "properties": {
+            "redacted": {
+              "description": "True when the provider withheld the reasoning text.",
+              "type": "boolean"
+            },
+            "thinking": {
+              "description": "The reasoning text (empty when `redacted`).",
+              "type": "string"
+            },
+            "thinkingSignature": {
+              "description": "Provider signature over the reasoning.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "thinking"
+            }
+          },
+          "required": [
+            "type",
+            "thinking"
+          ]
+        },
+        {
+          "description": "The model asking for a tool to run.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "description": "The arguments, a JSON object matching the tool's `parameters`."
+            },
+            "id": {
+              "description": "Provider-assigned call id; the tool result answers it by\n`toolCallId`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The tool's name in the loop's manifest.",
+              "type": "string"
+            },
+            "thoughtSignature": {
+              "description": "Provider signature over the model's thinking that led to this call.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "toolCall"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name",
+            "arguments"
+          ]
+        }
+      ]
+    },
+    "ConversationInfo": {
+      "description": "A conversation on disk, whether or not a loop currently runs on it (D-28).",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "The working directory it was recorded in.",
+          "$ref": "#/$defs/ServerPath"
+        },
+        "id": {
+          "description": "The conversation id; `loop.create { session }` continues it.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The conversation's display name, if one was set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The session log file.",
+          "$ref": "#/$defs/ServerPath"
+        },
+        "updated": {
+          "description": "Unix milliseconds of the last entry.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "cwd",
+        "path",
+        "updated"
+      ]
+    },
+    "Cost": {
+      "description": "Cost of a message in the provider's currency, by token class.",
+      "type": "object",
+      "properties": {
+        "cacheRead": {
+          "description": "Cost of tokens read from the prompt cache.",
+          "type": "number",
+          "format": "double"
+        },
+        "cacheWrite": {
+          "description": "Cost of tokens written to the prompt cache.",
+          "type": "number",
+          "format": "double"
+        },
+        "input": {
+          "description": "Cost of input tokens.",
+          "type": "number",
+          "format": "double"
+        },
+        "output": {
+          "description": "Cost of output tokens.",
+          "type": "number",
+          "format": "double"
+        },
+        "total": {
+          "description": "Sum of the above.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite",
+        "total"
+      ]
+    },
+    "Delta": {
+      "description": "A streamed fragment of an assistant message, tagged by `type`.",
+      "oneOf": [
+        {
+          "description": "More text for the text block at `index`.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "description": "Index of the content block within the message being streamed.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "text": {
+              "description": "The text to append.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "text"
+          ]
+        },
+        {
+          "description": "More reasoning for the thinking block at `index`.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "description": "Index of the content block within the message being streamed.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "thinking": {
+              "description": "The reasoning text to append.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "thinking"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "thinking"
+          ]
+        }
+      ]
+    },
+    "DslCheckParams": {
+      "description": "`dsl.check` params: run the policy loader and checker on the server, where\nthe files live. What `pirs check` calls.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "The directory whose policy files (with the user's global ones) to check.",
+          "$ref": "#/$defs/ServerPath"
+        }
+      },
+      "required": [
+        "cwd"
+      ]
+    },
+    "DslCheckResult": {
+      "description": "`dsl.check` result: the merged view a loop in `cwd` would start with.",
+      "type": "object",
+      "properties": {
+        "conflicts": {
+          "description": "Conflicts, each naming both files. Empty when the policy is clean.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DslConflict"
+          }
+        },
+        "files": {
+          "description": "The policy files found, in load order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServerPath"
+          }
+        },
+        "manifest": {
+          "description": "The merged manifest.",
+          "$ref": "#/$defs/Manifest"
+        },
+        "system_prompt": {
+          "description": "The fully assembled system prompt, with every rewrite applied and\nvisible (D-21).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "manifest",
+        "conflicts",
+        "system_prompt"
+      ]
+    },
+    "DslConflict": {
+      "description": "A composition error between two policy files.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "The two files involved.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServerPath"
+          }
+        },
+        "message": {
+          "description": "What conflicts (a duplicate key, two replacements of one prompt, …).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "files"
+      ]
+    },
+    "Empty": {
+      "description": "An empty result `{}`; the response of every request that has nothing to\nreturn.",
+      "type": "object"
+    },
+    "Envelope": {
+      "description": "One line on the wire, in any direction.\n\nUntagged: a message with `method` and `id` is a request, with `method`\nand no `id` a notification, and with `id` and no `method` a response.",
+      "anyOf": [
+        {
+          "description": "A request expecting a reply.",
+          "$ref": "#/$defs/RpcRequest"
+        },
+        {
+          "description": "A notification; no reply.",
+          "$ref": "#/$defs/RpcNotification"
+        },
+        {
+          "description": "A reply to an earlier request.",
+          "$ref": "#/$defs/RpcResponse"
+        }
+      ]
+    },
+    "Event": {
+      "description": "Every event, tagged by `method` with its `params`. Serialises as the two\nmembers of an [`RpcNotification`]; [`Event::into_rpc`] adds the envelope.",
+      "oneOf": [
+        {
+          "description": "State change.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.status"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopStatusEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Streamed delta or complete message.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.message"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopMessageEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "A turn ended.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.turn_end"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopTurnEndEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "A run ended; the loop is idle.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.run_end"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopRunEndEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Status key changed.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "ui.status"
+            },
+            "params": {
+              "$ref": "#/$defs/UiStatusEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Widget changed.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "ui.widget"
+            },
+            "params": {
+              "$ref": "#/$defs/UiWidgetEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Notice for the user.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "ui.notify"
+            },
+            "params": {
+              "$ref": "#/$defs/UiNotifyEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "A file was written by the loop's tools.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs.changed"
+            },
+            "params": {
+              "$ref": "#/$defs/FsChangedEvent"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        }
+      ]
+    },
+    "FsChangedEvent": {
+      "description": "`fs.changed`: one of the loop's own tools wrote a file. There is no\nwatcher; files changed by anything else are not reported.",
+      "type": "object",
+      "properties": {
+        "by": {
+          "description": "What wrote it.",
+          "$ref": "#/$defs/ChangedBy"
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The file, as the server names it; readable with `fs.read`.",
+          "$ref": "#/$defs/ServerPath"
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "path",
+        "by"
+      ]
+    },
+    "FsEntry": {
+      "description": "One entry of `fs.list`.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Size in bytes, for files.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "description": "File or directory.",
+          "$ref": "#/$defs/FsEntryKind"
+        },
+        "name": {
+          "description": "The entry's name within the listed directory, for display.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The entry's full path, as the server spells it: hand it back to\n`fs.list` or `fs.read` unchanged; never parse or join it (D-31).",
+          "$ref": "#/$defs/ServerPath"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "kind"
+      ]
+    },
+    "FsEntryKind": {
+      "description": "What a directory entry is.",
+      "oneOf": [
+        {
+          "description": "A regular file (or a symlink to one).",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "A directory.",
+          "type": "string",
+          "const": "dir"
+        }
+      ]
+    },
+    "FsListParams": {
+      "description": "`fs.list` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop whose server reads the directory.",
+          "type": "string"
+        },
+        "path": {
+          "description": "A directory on that server; relative paths are relative to the loop's cwd.",
+          "$ref": "#/$defs/ServerPath"
+        }
+      },
+      "required": [
+        "loop",
+        "path"
+      ]
+    },
+    "FsListResult": {
+      "description": "`fs.list` result.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "The directory's entries, sorted by name.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FsEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ]
+    },
+    "FsReadParams": {
+      "description": "`fs.read` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop whose server reads the file.",
+          "type": "string"
+        },
+        "path": {
+          "description": "A file on that server, or a `ref` from an earlier by-reference payload.",
+          "$ref": "#/$defs/ServerPath"
+        }
+      },
+      "required": [
+        "loop",
+        "path"
+      ]
+    },
+    "FsReadResult": {
+      "description": "`fs.read` result: the content inline when it is small enough, otherwise a\nreference (D-11). A `ref` handed back to `fs.read` is served inline in\nfull, whatever its size.",
+      "anyOf": [
+        {
+          "description": "The file's content as UTF-8 text.",
+          "type": "object",
+          "properties": {
+            "content": {
+              "description": "The content.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content"
+          ]
+        },
+        {
+          "description": "The content is above the threshold; fetch it by its `ref`.",
+          "$ref": "#/$defs/Ref"
+        }
+      ]
+    },
+    "HelloParams": {
+      "description": "`hello` params: the first message on every connection.",
+      "type": "object",
+      "properties": {
+        "client": {
+          "description": "The client's name and version, free text for logs (`pirs-tui 0.1.0`).",
+          "type": "string"
+        },
+        "protocol_version": {
+          "description": "The client's [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client",
+        "protocol_version"
+      ]
+    },
+    "HelloResult": {
+      "description": "`hello` result.",
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "description": "The server's protocol version. Same major as the client's, or the\nrequest failed with `VERSION_REFUSED` instead.",
+          "type": "string"
+        },
+        "server": {
+          "description": "The server's name and version, free text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "protocol_version"
+      ]
+    },
+    "Id": {
+      "description": "A JSON-RPC request id: an integer or a string, chosen by the sender and\nechoed in the reply. Clients pick ids for their requests; the server picks\nids for the slot requests it sends to handlers.",
+      "anyOf": [
+        {
+          "description": "An integer id.",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "A string id.",
+          "type": "string"
+        }
+      ]
+    },
+    "InputPayload": {
+      "description": "`input` payload: a prompt on its way to the model.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "description": "The text the user (or a client) sent, after any earlier `input`\nhandler's rewrite.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "InputReply": {
+      "description": "`input` reply.",
+      "anyOf": [
+        {
+          "description": "The text to hand on (unchanged, rewritten, or expanded from a slash\ncommand).",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The text the model will see.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "description": "The input was consumed; nothing reaches the model and no turn starts.",
+          "type": "object",
+          "properties": {
+            "handled": {
+              "description": "Always `true`.",
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "handled"
+          ]
+        }
+      ]
+    },
+    "LoopAbortParams": {
+      "description": "`loop.abort` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop whose current turn to abort (Esc). Idle loops are unaffected.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "LoopAttachParams": {
+      "description": "`loop.attach` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop to attach to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "LoopAttachResult": {
+      "description": "`loop.attach` result: what a client needs to render the loop and to\n`subscribe` from the right point.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "$ref": "#/$defs/LoopInfo"
+        },
+        "manifest": {
+          "description": "Its merged manifest.",
+          "$ref": "#/$defs/Manifest"
+        },
+        "seq": {
+          "description": "The latest `seq` in the loop's log; `subscribe { since: seq }` from\nhere misses nothing.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop",
+        "manifest",
+        "seq"
+      ]
+    },
+    "LoopCloseParams": {
+      "description": "`loop.close` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop to close. Its processes are killed; its conversation stays.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "LoopCreateParams": {
+      "description": "`loop.create` params.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "Working directory on the server.",
+          "$ref": "#/$defs/ServerPath"
+        },
+        "model": {
+          "description": "Model to run; absent means the server's default.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "A name for the loop and its conversation, shown in lists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "description": "A conversation id to continue (from `loop.list`'s `conversations`);\nabsent starts a new conversation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd"
+      ]
+    },
+    "LoopInfo": {
+      "description": "A running loop, as `loop.create`, `loop.list` and `loop.attach` describe it.",
+      "type": "object",
+      "properties": {
+        "conversation": {
+          "description": "The id of the conversation (session log) this loop appends to.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "The working directory the loop's tools and policy files are relative to.",
+          "$ref": "#/$defs/ServerPath"
+        },
+        "id": {
+          "description": "Short random id, unique on this server for its lifetime.",
+          "type": "string"
+        },
+        "model": {
+          "description": "The model the loop currently runs.",
+          "$ref": "#/$defs/ModelSpec"
+        },
+        "name": {
+          "description": "The name given at `loop.create`, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "Unix milliseconds when `state` last changed.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "state": {
+          "description": "`working` or `idle`.",
+          "$ref": "#/$defs/LoopState"
+        }
+      },
+      "required": [
+        "id",
+        "cwd",
+        "model",
+        "state",
+        "since",
+        "conversation"
+      ]
+    },
+    "LoopListParams": {
+      "description": "`loop.list` params.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "When present, `conversations` in the result lists the conversations\nrecorded for this directory; when absent it is empty. Running loops\nare listed regardless.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServerPath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "LoopListResult": {
+      "description": "`loop.list` result.",
+      "type": "object",
+      "properties": {
+        "conversations": {
+          "description": "Conversations on disk for the requested `cwd`, most recent first;\nempty when no `cwd` was given.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationInfo"
+          }
+        },
+        "loops": {
+          "description": "Every running loop on this server.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LoopInfo"
+          }
+        }
+      },
+      "required": [
+        "loops",
+        "conversations"
+      ]
+    },
+    "LoopMessageEvent": {
+      "description": "`loop.message`: conversation traffic — streaming assistant text and\nthinking as deltas, then each complete message.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "role": {
+          "description": "The role of the message this belongs to.",
+          "$ref": "#/$defs/Role"
+        },
+        "seq": {
+          "description": "Log sequence number; absent on deltas, which are not logged.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "anyOf": [
+        {
+          "description": "A fragment of the assistant message being streamed. Carries no `seq`.",
+          "type": "object",
+          "properties": {
+            "delta": {
+              "description": "The fragment.",
+              "$ref": "#/$defs/Delta"
+            }
+          },
+          "required": [
+            "delta"
+          ]
+        },
+        {
+          "description": "A complete message appended to the conversation: the user's prompt as\nthe model saw it, the finished assistant message (including its tool\ncalls), or a tool result.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "The message.",
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      ],
+      "required": [
+        "loop",
+        "role"
+      ]
+    },
+    "LoopModelParams": {
+      "description": "`loop.model` params: change the loop's model between turns.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "spec": {
+          "description": "The new model and thinking level.",
+          "$ref": "#/$defs/ModelSpec"
+        }
+      },
+      "required": [
+        "loop",
+        "spec"
+      ]
+    },
+    "LoopPromptParams": {
+      "description": "`loop.prompt` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop to prompt.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The prompt text. It passes through the `input` slot before the model\nsees it.",
+          "type": "string"
+        },
+        "when": {
+          "description": "Delivery timing.",
+          "$ref": "#/$defs/PromptWhen",
+          "default": "now"
+        }
+      },
+      "required": [
+        "loop",
+        "text"
+      ]
+    },
+    "LoopReloadParams": {
+      "description": "`loop.reload` params: re-read the loop's policy files now. The server\nalso does this by itself when one of the loop's own tools writes a policy\nfile (D-33).",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "LoopReloadResult": {
+      "description": "`loop.reload` result.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "The policy files now loaded, in load order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServerPath"
+          }
+        }
+      },
+      "required": [
+        "files"
+      ]
+    },
+    "LoopRunEndEvent": {
+      "description": "`loop.run_end`: the loop went idle after a prompt — no more tool calls to\nrun and no queued prompt.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "messages": {
+          "description": "Every message the run appended, across all its turns.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "messages"
+      ]
+    },
+    "LoopSelector": {
+      "description": "A loop id, or \"*\" for every loop on the server including ones created later.",
+      "type": "string"
+    },
+    "LoopState": {
+      "description": "What a loop is doing. There is no third state: nothing but the model asks\nthe user anything, and it does so in text and then goes idle (D-37).",
+      "oneOf": [
+        {
+          "description": "A turn is running: the model is generating or a tool is executing.",
+          "type": "string",
+          "const": "working"
+        },
+        {
+          "description": "Stopped; will do nothing until prompted.",
+          "type": "string",
+          "const": "idle"
+        }
+      ]
+    },
+    "LoopStatusEvent": {
+      "description": "`loop.status`: the loop changed state.",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "description": "One line about why, when there is something to say (`aborted`,\n`error: …`, `closed`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "since": {
+          "description": "Unix milliseconds when the state changed.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "state": {
+          "description": "The new state.",
+          "$ref": "#/$defs/LoopState"
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "state",
+        "since"
+      ]
+    },
+    "LoopToolsParams": {
+      "description": "`loop.tools` params: set the loop's active tool set.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Names from the manifest; tools not listed are disabled for the loop.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "loop",
+        "names"
+      ]
+    },
+    "LoopTurnEndEvent": {
+      "description": "`loop.turn_end`: the model stopped once (a turn ends at every stop reason;\na `toolUse` stop is followed by tool results and another turn).",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "messages": {
+          "description": "The messages this turn appended, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "messages"
+      ]
+    },
+    "LoopWaitParams": {
+      "description": "`loop.wait` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop to wait for. The response arrives when it is idle.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "LoopWaitResult": {
+      "description": "`loop.wait` result.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "description": "The loop's state when the wait ended; `idle` unless the loop was\nclosed meanwhile.",
+          "$ref": "#/$defs/LoopState"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "Manifest": {
+      "description": "The loop's merged manifest: everything its policy files and built-ins\ncontribute that a client needs to render or complete.",
+      "type": "object",
+      "properties": {
+        "commands": {
+          "description": "Slash commands.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommandInfo"
+          }
+        },
+        "status_keys": {
+          "description": "Keys that `ui.status` events may carry, so a status line can be laid\nout before the first event.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Tools the model can call, built-in and policy-defined, after\ndisabling and wrapping.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolInfo"
+          }
+        },
+        "widget_keys": {
+          "description": "Keys that `ui.widget` events may carry.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "tools",
+        "commands",
+        "status_keys",
+        "widget_keys"
+      ]
+    },
+    "Message": {
+      "description": "A conversation message, tagged by `role`. This is the element type of\n`loop.turn_end { messages }`, `loop.run_end { messages }` and\n`loop.message { message }`, and the `message` member of a session-log entry.",
+      "oneOf": [
+        {
+          "description": "`role: \"system\"`.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "system"
+            }
+          },
+          "$ref": "#/$defs/SystemMessage",
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "`role: \"user\"`.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "$ref": "#/$defs/UserMessage",
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "`role: \"assistant\"`.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "assistant"
+            }
+          },
+          "$ref": "#/$defs/AssistantMessage",
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "`role: \"toolResult\"`.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "toolResult"
+            }
+          },
+          "$ref": "#/$defs/ToolResultMessage",
+          "required": [
+            "role"
+          ]
+        }
+      ]
+    },
+    "ModelSpec": {
+      "description": "Which model a loop runs, and how hard it thinks.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "The model as `provider/id` (e.g. `anthropic/claude-sonnet-4-5`,\n`faux/scripted`) or a bare id the server's registry resolves.",
+          "type": "string"
+        },
+        "thinking": {
+          "description": "Thinking level; absent means the server's default for the model.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model"
+      ]
+    },
+    "NotifyLevel": {
+      "description": "Severity of a `ui.notify`.",
+      "oneOf": [
+        {
+          "description": "Informational.",
+          "type": "string",
+          "const": "info"
+        },
+        {
+          "description": "Something to look at, e.g. a handler timed out and was skipped.",
+          "type": "string",
+          "const": "warning"
+        },
+        {
+          "description": "Something failed.",
+          "type": "string",
+          "const": "error"
+        }
+      ]
+    },
+    "OnReloadPayload": {
+      "description": "`on.reload` payload.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "The policy files now loaded, in load order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServerPath"
+          }
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "files"
+      ]
+    },
+    "OnStartPayload": {
+      "description": "`on.start` payload.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "Its working directory.",
+          "$ref": "#/$defs/ServerPath"
+        },
+        "loop": {
+          "description": "The loop that started.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "cwd"
+      ]
+    },
+    "OnToolResultPayload": {
+      "description": "`on.tool_result` payload.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "The arguments the model called it with."
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "result": {
+          "description": "The result as the model reads it (after any `tool_result` rewrite).",
+          "$ref": "#/$defs/ToolReply"
+        },
+        "tool": {
+          "description": "The tool's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "tool",
+        "args",
+        "result"
+      ]
+    },
+    "PromptPayload": {
+      "description": "`prompt` payload: the system prompt as assembled so far.",
+      "type": "object",
+      "properties": {
+        "system_prompt": {
+          "description": "The full system prompt text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system_prompt"
+      ]
+    },
+    "PromptReply": {
+      "description": "`prompt` reply.",
+      "anyOf": [
+        {
+          "description": "Append this text to the prompt.",
+          "type": "object",
+          "properties": {
+            "append": {
+              "description": "Text appended after the current prompt.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "append"
+          ]
+        },
+        {
+          "description": "Replace the whole prompt.",
+          "type": "object",
+          "properties": {
+            "replace": {
+              "description": "The new prompt.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "replace"
+          ]
+        }
+      ]
+    },
+    "PromptWhen": {
+      "description": "When a prompt is delivered relative to the running turn.",
+      "oneOf": [
+        {
+          "description": "Steer: deliver at the next opportunity inside the current turn, or\nimmediately when idle.",
+          "type": "string",
+          "const": "now"
+        },
+        {
+          "description": "After the current turn ends (after the model's next stop).",
+          "type": "string",
+          "const": "after_turn"
+        },
+        {
+          "description": "Queue as the next input, after the run ends.",
+          "type": "string",
+          "const": "next_input"
+        }
+      ]
+    },
+    "Ref": {
+      "description": "A payload that travels by reference because it is above the size threshold\n(64 KB by default).\n\nThe server writes the content to a file in the loop's session directory\nand sends this instead. `ref` is itself a [`ServerPath`] that `fs.read`\nserves, so one request fetches it; `bytes` is the content's size so a\nclient can decide whether to.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Size of the content in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ref": {
+          "description": "Where the content is; read it with `fs.read { loop, path: ref }`.",
+          "$ref": "#/$defs/ServerPath"
+        }
+      },
+      "required": [
+        "ref",
+        "bytes"
+      ]
+    },
+    "RegisterParams": {
+      "description": "`register` params: become a handler for a slot on a loop. The server then\nsends this connection a [`SlotRequest`](crate::SlotRequest) each time the\nslot fires and waits up to `timeout` for the reply. A registration ends\nwith `unregister`, with the loop, or when the connection drops.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "slot": {
+          "description": "The slot: `input`, `prompt`, `tool_result`, `tool.<name>` or `on.<event>`.",
+          "$ref": "#/$defs/Slot"
+        },
+        "timeout": {
+          "description": "How long the server waits for a reply, in milliseconds. Expiry counts\nas \"no opinion\" (the slot's default outcome) plus a `ui.notify`\nwarning.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop",
+        "slot",
+        "timeout"
+      ]
+    },
+    "Request": {
+      "description": "Every request a client may send, tagged by `method` with its `params`.\n\nSerialises as `{ \"method\": \"<name>\", \"params\": { … } }`, the two members of\nan [`RpcRequest`]; [`Request::into_rpc`] adds the envelope.",
+      "oneOf": [
+        {
+          "description": "First message on every connection. Result: [`HelloResult`]. Fails with\n`VERSION_REFUSED` when the majors differ.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "hello"
+            },
+            "params": {
+              "$ref": "#/$defs/HelloParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Start a loop. Result: [`LoopInfo`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.create"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "List running loops and, for a `cwd`, its conversations. Result:\n[`LoopListResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.list"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Attach: get the loop, its manifest and its latest `seq`. Result:\n[`LoopAttachResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.attach"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopAttachParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Close a loop and kill its processes. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.close"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Send a prompt. Result: [`Empty`]; the model's answer arrives as events.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.prompt"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopPromptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Abort the current turn. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.abort"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopAbortParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Block until the loop is idle. Result: [`LoopWaitResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.wait"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopWaitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Observe events. Result: [`Empty`]; replayed events follow if `since`\nwas given.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "subscribe"
+            },
+            "params": {
+              "$ref": "#/$defs/SubscribeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Stop observing. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "unsubscribe"
+            },
+            "params": {
+              "$ref": "#/$defs/UnsubscribeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Handle a slot. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "register"
+            },
+            "params": {
+              "$ref": "#/$defs/RegisterParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Stop handling a slot. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "unregister"
+            },
+            "params": {
+              "$ref": "#/$defs/UnregisterParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Emit a `ui.status` event. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "ui.status"
+            },
+            "params": {
+              "$ref": "#/$defs/UiStatusParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Emit a `ui.widget` event. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "ui.widget"
+            },
+            "params": {
+              "$ref": "#/$defs/UiWidgetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Emit a `ui.notify` event. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "ui.notify"
+            },
+            "params": {
+              "$ref": "#/$defs/UiNotifyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "List a directory on the loop's server. Result: [`FsListResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs.list"
+            },
+            "params": {
+              "$ref": "#/$defs/FsListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Read a file on the loop's server. Result: [`FsReadResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs.read"
+            },
+            "params": {
+              "$ref": "#/$defs/FsReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Set the active tool set. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.tools"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopToolsParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Change the model. Result: [`Empty`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.model"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopModelParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Re-read policy files. Result: [`LoopReloadResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "loop.reload"
+            },
+            "params": {
+              "$ref": "#/$defs/LoopReloadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Check policy files for a directory. Result: [`DslCheckResult`].",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "dsl.check"
+            },
+            "params": {
+              "$ref": "#/$defs/DslCheckParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        }
+      ]
+    },
+    "Role": {
+      "description": "A message role, as the `role` tag spells it.",
+      "oneOf": [
+        {
+          "description": "The system prompt.",
+          "type": "string",
+          "const": "system"
+        },
+        {
+          "description": "The user.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "The model.",
+          "type": "string",
+          "const": "assistant"
+        },
+        {
+          "description": "A tool answering a tool call.",
+          "type": "string",
+          "const": "toolResult"
+        }
+      ]
+    },
+    "RpcError": {
+      "description": "The `error` member of a failed response.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "One of the constants in [`code`].",
+          "type": "integer",
+          "format": "int64"
+        },
+        "data": {
+          "description": "Structured detail, documented per code."
+        },
+        "message": {
+          "description": "A short human-readable message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "RpcNotification": {
+      "description": "A notification: `{ jsonrpc, method, params }` with no `id`, so no reply is\npossible. Every [`Event`](crate::Event) travels as one.",
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "description": "Always `\"2.0\"`.",
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "description": "The event name.",
+          "type": "string"
+        },
+        "params": {
+          "description": "The event payload, always a JSON object in this protocol.",
+          "default": null
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ]
+    },
+    "RpcRequest": {
+      "description": "A request: `{ jsonrpc, id, method, params }`. Expects exactly one\n[`RpcResponse`] with the same `id`.\n\nClient → server requests have a [`Request`](crate::Request) method; server →\nhandler requests have a [`Slot`](crate::Slot) as their method.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Echoed in the response.",
+          "$ref": "#/$defs/Id"
+        },
+        "jsonrpc": {
+          "description": "Always `\"2.0\"`.",
+          "type": "string",
+          "const": "2.0"
+        },
+        "method": {
+          "description": "The request or slot name.",
+          "type": "string"
+        },
+        "params": {
+          "description": "The method's parameters, always a JSON object in this protocol.",
+          "default": null
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ]
+    },
+    "RpcResponse": {
+      "description": "A response: `{ jsonrpc, id, result }` on success or `{ jsonrpc, id, error }`\non failure — never both.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "The error, present on failure.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "The id of the request being answered.",
+          "$ref": "#/$defs/Id"
+        },
+        "jsonrpc": {
+          "description": "Always `\"2.0\"`.",
+          "type": "string",
+          "const": "2.0"
+        },
+        "result": {
+          "description": "The result, present on success. `{}` for requests without a result."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "ServerPath": {
+      "description": "A path on the server that runs the loop.\n\nEvery path in every message is one of these: a label the server produced\nand that a client only ever hands back to the same server (`fs.list`,\n`fs.read`, `loop.create { cwd }`). Clients do not parse, join, normalise or\nopen it — it may belong to a machine or container the client cannot see.\nAccordingly this type has no filesystem operations and no conversion to\n`std::path::Path`; a server converts at its own edge.",
+      "type": "string"
+    },
+    "Slot": {
+      "description": "A handler slot: `input`, `prompt`, `tool_result`, `tool.<name>` or `on.<event>` where event is start, turn_end, run_end, tool_result or reload. Also the `method` of the request the server sends the handler.",
+      "type": "string",
+      "pattern": "^(input|prompt|tool_result|tool\\.\\S+|on\\.(start|turn_end|run_end|tool_result|reload))$"
+    },
+    "StopReason": {
+      "description": "Why the model stopped.",
+      "oneOf": [
+        {
+          "description": "Still streaming; never appears in a complete message.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "The model finished its turn.",
+          "type": "string",
+          "const": "stop"
+        },
+        {
+          "description": "The output token limit was reached.",
+          "type": "string",
+          "const": "length"
+        },
+        {
+          "description": "The model called one or more tools; the loop runs them and continues.",
+          "type": "string",
+          "const": "toolUse"
+        },
+        {
+          "description": "The provider returned an error; see `errorMessage`.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "The turn was aborted (`loop.abort`).",
+          "type": "string",
+          "const": "aborted"
+        }
+      ]
+    },
+    "SubscribeParams": {
+      "description": "`subscribe` params: become an observer of a loop's events. Observers are\nnever waited on.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "description": "Event names to receive (`loop.message`, `fs.changed`, …); absent means\nall.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "loop": {
+          "description": "Which loop(s).",
+          "$ref": "#/$defs/LoopSelector"
+        },
+        "since": {
+          "description": "Replay sequenced events with `seq` greater than this from the session\nlog before live ones, across runs. Deltas are not replayed (D-06).\n`0` replays everything; absent replays nothing.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "SystemMessage": {
+      "description": "The system prompt, as recorded in the session log.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "The prompt text (empty when `sections` carries it).",
+          "$ref": "#/$defs/UserContent"
+        },
+        "sections": {
+          "description": "Named prompt sections; `null` removes a section set by an earlier\nsystem message. Replaying system messages in order yields the current\nprompt.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "timestamp": {
+          "description": "Unix milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "toolsAdded": {
+          "description": "Tool declarations added to the loadout by this message.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ToolInfo"
+          }
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "ThinkingLevel": {
+      "description": "How much the model should think. Mirrors the server's model layer; the\nserver maps it to each provider's budget or effort setting.",
+      "oneOf": [
+        {
+          "description": "No extended thinking.",
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "description": "The smallest budget the provider allows.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "A small budget.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "A medium budget.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "A large budget.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "A very large budget.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "The largest budget the provider allows.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    },
+    "ToolCallPayload": {
+      "description": "`tool.<name>` payload: the model called the tool.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "The arguments, matching the tool's `parameters` schema."
+        },
+        "id": {
+          "description": "The tool-call id, for correlating with the session log.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "args",
+        "id"
+      ]
+    },
+    "ToolContent": {
+      "description": "Tool output content: a bare string (one text block) or a list of text and\nimage blocks.",
+      "anyOf": [
+        {
+          "description": "A string, equivalent to one text block.",
+          "type": "string"
+        },
+        {
+          "description": "Text and image blocks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Content"
+          }
+        }
+      ]
+    },
+    "ToolInfo": {
+      "description": "A tool declaration: the shape the model is shown and the manifest lists.\nAlso the element type of a system message's `toolsAdded`.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What the tool does, as the model reads it.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The tool's name, as the model calls it.",
+          "type": "string"
+        },
+        "parameters": {
+          "description": "JSON Schema (an object schema) for the tool's arguments."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "parameters"
+      ]
+    },
+    "ToolReply": {
+      "description": "What a tool produced: the `tool.<name>` reply, and the `result` a\n`tool_result` handler sees and returns.",
+      "anyOf": [
+        {
+          "description": "The tool succeeded.",
+          "type": "object",
+          "properties": {
+            "content": {
+              "description": "What the model reads.",
+              "$ref": "#/$defs/ToolContent"
+            },
+            "details": {
+              "description": "Metadata for UIs, not sent to the model."
+            }
+          },
+          "required": [
+            "content"
+          ]
+        },
+        {
+          "description": "The tool failed; the model reads `error` as an error result.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "The error text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    },
+    "ToolResultMessage": {
+      "description": "The result of a tool call, as the model reads it. When a `tool_result`\nhandler rewrote it, this is the rewritten one; the session log holds the\noriginal beside it.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "Text and image blocks the model reads.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Content"
+          }
+        },
+        "details": {
+          "description": "Tool-specific metadata not sent to the model (shown by UIs)."
+        },
+        "isError": {
+          "description": "Whether the tool failed; the content is then the error text.",
+          "type": "boolean"
+        },
+        "timestamp": {
+          "description": "Unix milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "toolCallId": {
+          "description": "The `id` of the tool-call block being answered.",
+          "type": "string"
+        },
+        "toolName": {
+          "description": "The tool's name.",
+          "type": "string"
+        },
+        "usage": {
+          "description": "LLM usage the tool itself incurred (e.g. a `loop` tool).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "toolCallId",
+        "toolName",
+        "content",
+        "isError"
+      ]
+    },
+    "ToolResultPayload": {
+      "description": "`tool_result` payload: a result on its way to the model.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "The arguments the model called it with."
+        },
+        "result": {
+          "description": "What the tool produced.",
+          "$ref": "#/$defs/ToolReply"
+        },
+        "tool": {
+          "description": "The tool's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "args",
+        "result"
+      ]
+    },
+    "ToolResultReply": {
+      "description": "`tool_result` reply.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "description": "The result the model reads instead. The original stays in the session\nlog beside it.",
+          "$ref": "#/$defs/ToolReply"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    },
+    "UiNotifyEvent": {
+      "description": "`ui.notify`: a one-off message for the user. Print mode shows it on\nstderr; the TUI shows it as a notice.",
+      "type": "object",
+      "properties": {
+        "level": {
+          "description": "Severity.",
+          "$ref": "#/$defs/NotifyLevel"
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "text": {
+          "description": "The message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "level",
+        "text"
+      ]
+    },
+    "UiNotifyParams": {
+      "description": "`ui.notify` params: ask the server to emit a `ui.notify` event.",
+      "type": "object",
+      "properties": {
+        "level": {
+          "description": "Severity.",
+          "$ref": "#/$defs/NotifyLevel"
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "level",
+        "text"
+      ]
+    },
+    "UiStatusEvent": {
+      "description": "`ui.status`: a status key changed.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The status key.",
+          "type": "string"
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "text": {
+          "description": "The new text; empty clears the key.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "key",
+        "text"
+      ]
+    },
+    "UiStatusParams": {
+      "description": "`ui.status` params: ask the server to emit a `ui.status` event.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The status key (one of the manifest's `status_keys`, or a new one).",
+          "type": "string"
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "text": {
+          "description": "One line of text; empty clears the key.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "key",
+        "text"
+      ]
+    },
+    "UiWidgetEvent": {
+      "description": "`ui.widget`: a widget's lines changed.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The widget key.",
+          "type": "string"
+        },
+        "lines": {
+          "description": "Lines to draw; empty removes the widget.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Log sequence number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loop",
+        "seq",
+        "key",
+        "lines"
+      ]
+    },
+    "UiWidgetParams": {
+      "description": "`ui.widget` params: ask the server to emit a `ui.widget` event.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The widget key.",
+          "type": "string"
+        },
+        "lines": {
+          "description": "Lines to draw; empty removes the widget.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loop",
+        "key",
+        "lines"
+      ]
+    },
+    "UnregisterParams": {
+      "description": "`unregister` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The loop.",
+          "type": "string"
+        },
+        "slot": {
+          "description": "The slot this connection registered.",
+          "$ref": "#/$defs/Slot"
+        }
+      },
+      "required": [
+        "loop",
+        "slot"
+      ]
+    },
+    "UnsubscribeParams": {
+      "description": "`unsubscribe` params.",
+      "type": "object",
+      "properties": {
+        "loop": {
+          "description": "The same selector given to `subscribe`.",
+          "$ref": "#/$defs/LoopSelector"
+        }
+      },
+      "required": [
+        "loop"
+      ]
+    },
+    "Usage": {
+      "description": "Token usage of a message.",
+      "type": "object",
+      "properties": {
+        "cacheRead": {
+          "description": "Tokens read from the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cacheWrite": {
+          "description": "Tokens written to the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cost": {
+          "description": "Cost breakdown.",
+          "$ref": "#/$defs/Cost"
+        },
+        "input": {
+          "description": "Input tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "description": "Output tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "reasoning": {
+          "description": "Reasoning tokens, when the provider reports them separately.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "totalTokens": {
+          "description": "Sum of input, output, cache read and cache write.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite",
+        "totalTokens",
+        "cost"
+      ]
+    },
+    "UserContent": {
+      "description": "`string | Content[]`: the content of system and user messages, which the\nsession format allows as a bare string.",
+      "anyOf": [
+        {
+          "description": "A bare string, equivalent to one text block.",
+          "type": "string"
+        },
+        {
+          "description": "A list of blocks (text and images).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Content"
+          }
+        }
+      ]
+    },
+    "UserMessage": {
+      "description": "What the user (or a rewriting `input` handler) said.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "Text, or text and image blocks.",
+          "$ref": "#/$defs/UserContent"
+        },
+        "timestamp": {
+          "description": "Unix milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "content"
+      ]
+    }
+  }
+}

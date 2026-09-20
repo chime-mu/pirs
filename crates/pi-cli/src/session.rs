@@ -22,9 +22,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
-pub const CURRENT_SESSION_VERSION: u32 = 3;
+pub(crate) const CURRENT_SESSION_VERSION: u32 = 3;
 const APP_NAME: &str = "pi";
 const ENV_AGENT_DIR: &str = "PI_CODING_AGENT_DIR";
 /// Bound header discovery so a corrupt file cannot make listing read gigabytes.
@@ -37,7 +38,7 @@ const MAX_SESSION_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
 /// First line of a session file. Metadata only, not part of the tree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionHeader {
+pub(crate) struct SessionHeader {
     /// Always `"session"`.
     #[serde(rename = "type")]
     pub entry_type: String,
@@ -61,7 +62,7 @@ pub struct SessionHeader {
 /// JSON so that entries written by newer pi versions or extensions survive.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum EntryKind {
+pub(crate) enum EntryKind {
     Message {
         message: AgentMessage,
     },
@@ -142,11 +143,11 @@ mod tagged_system_message {
     use pi_ai::{Message, SystemMessage};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S: Serializer>(value: &Option<SystemMessage>, s: S) -> Result<S::Ok, S::Error> {
+    pub(super) fn serialize<S: Serializer>(value: &Option<SystemMessage>, s: S) -> Result<S::Ok, S::Error> {
         value.clone().map(Message::System).serialize(s)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<SystemMessage>, D::Error> {
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<SystemMessage>, D::Error> {
         match Option::<Message>::deserialize(d)? {
             None => Ok(None),
             Some(Message::System(sys)) => Ok(Some(sys)),
@@ -157,7 +158,7 @@ mod tagged_system_message {
 
 impl EntryKind {
     /// The `type` tag as written to the file.
-    pub fn type_name(&self) -> &str {
+    pub(crate) fn type_name(&self) -> &str {
         match self {
             Self::Message { .. } => "message",
             Self::ThinkingLevelChange { .. } => "thinking_level_change",
@@ -184,7 +185,7 @@ impl EntryKind {
 
 /// A session entry: tree metadata plus the typed payload.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SessionEntry {
+pub(crate) struct SessionEntry {
     /// Usually 8 hex chars; may be a full UUID on collision fallback.
     pub id: String,
     /// `None` for a root entry.
@@ -195,11 +196,11 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
-    pub fn type_name(&self) -> &str {
+    pub(crate) fn type_name(&self) -> &str {
         self.kind.type_name()
     }
 
-    pub fn message(&self) -> Option<&AgentMessage> {
+    pub(crate) fn message(&self) -> Option<&AgentMessage> {
         match &self.kind {
             EntryKind::Message { message } => Some(message),
             _ => None,
@@ -215,7 +216,7 @@ impl SessionEntry {
     }
 
     /// Unix-ms version of `timestamp` (0 when unparseable).
-    pub fn timestamp_ms(&self) -> u64 {
+    pub(crate) fn timestamp_ms(&self) -> u64 {
         iso_to_ms(&self.timestamp)
     }
 
@@ -275,7 +276,7 @@ impl<'de> Deserialize<'de> for SessionEntry {
 
 /// What gets sent to the LLM for the current branch.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SessionContext {
+pub(crate) struct SessionContext {
     pub messages: Vec<AgentMessage>,
     /// Most recent `thinking_level_change` on the path, if any.
     pub thinking_level: Option<String>,
@@ -285,7 +286,7 @@ pub struct SessionContext {
 
 /// Metadata about a session file, as shown by `/resume`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SessionInfo {
+pub(crate) struct SessionInfo {
     pub path: PathBuf,
     pub id: String,
     /// Empty string for old sessions without a cwd.
@@ -302,7 +303,7 @@ pub struct SessionInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct NewSessionOptions {
+pub(crate) struct NewSessionOptions {
     pub id: Option<String>,
     pub parent_session: Option<String>,
 }
@@ -332,19 +333,25 @@ fn file_timestamp(iso: &str) -> String {
     iso.replace([':', '.'], "-")
 }
 
-/// UUIDv7 (time-ordered) like pi's `createSessionId`.
+/// UUIDv7 (time-ordered) like pi's `createSessionId`, with a per-process
+/// counter in the bits right after the timestamp so that ids minted in the
+/// same millisecond still sort in creation order.
 fn create_session_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let ms = pi_ai::now_ms();
+    // 18 bits of counter: the 12 `rand_a` bits plus the top 6 of `rand_b`.
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed) & 0x3_ffff;
     let random = Uuid::new_v4().into_bytes();
     let mut bytes = [0u8; 16];
     bytes[..6].copy_from_slice(&ms.to_be_bytes()[2..8]);
     bytes[6..].copy_from_slice(&random[6..]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x70;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    bytes[6] = 0x70 | ((seq >> 14) & 0x0f) as u8;
+    bytes[7] = ((seq >> 6) & 0xff) as u8;
+    bytes[8] = 0x80 | (seq & 0x3f) as u8;
     Uuid::from_bytes(bytes).hyphenated().to_string()
 }
 
-pub fn assert_valid_session_id(id: &str) -> Result<()> {
+pub(crate) fn assert_valid_session_id(id: &str) -> Result<()> {
     let ok_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
     let first = id.chars().next();
     let last = id.chars().last();
@@ -371,7 +378,7 @@ fn generate_id(taken: impl Fn(&str) -> bool) -> String {
 }
 
 /// Lexically absolute + normalized path (like Node's `path.resolve`).
-pub fn resolve_path(input: impl AsRef<Path>) -> PathBuf {
+pub(crate) fn resolve_path(input: impl AsRef<Path>) -> PathBuf {
     let input = input.as_ref();
     let joined = if input.is_absolute() {
         input.to_path_buf()
@@ -409,7 +416,7 @@ fn expand_tilde(p: &str) -> PathBuf {
 }
 
 /// `$PI_CODING_AGENT_DIR` or `~/.pi/agent`.
-pub fn get_agent_dir() -> PathBuf {
+pub(crate) fn get_agent_dir() -> PathBuf {
     if let Ok(dir) = std::env::var(ENV_AGENT_DIR) {
         if !dir.is_empty() {
             return expand_tilde(&dir);
@@ -419,12 +426,12 @@ pub fn get_agent_dir() -> PathBuf {
 }
 
 /// Root directory holding one sub-directory per project cwd.
-pub fn get_sessions_dir() -> PathBuf {
+pub(crate) fn get_sessions_dir() -> PathBuf {
     get_agent_dir().join("sessions")
 }
 
 /// `--<cwd with leading separator removed and / \ : replaced by ->--`.
-pub fn encode_cwd_dir_name(resolved_cwd: &str) -> String {
+pub(crate) fn encode_cwd_dir_name(resolved_cwd: &str) -> String {
     let stripped = resolved_cwd
         .strip_prefix('/')
         .or_else(|| resolved_cwd.strip_prefix('\\'))
@@ -433,17 +440,17 @@ pub fn encode_cwd_dir_name(resolved_cwd: &str) -> String {
 }
 
 /// Default session directory for a cwd under `agent_dir` (not created).
-pub fn get_default_session_dir_path_in(cwd: &str, agent_dir: &Path) -> PathBuf {
+pub(crate) fn get_default_session_dir_path_in(cwd: &str, agent_dir: &Path) -> PathBuf {
     resolve_path(agent_dir).join("sessions").join(encode_cwd_dir_name(&path_string(&resolve_path(cwd))))
 }
 
 /// Default session directory for a cwd (`~/.pi/agent/sessions/--<cwd>--`, not created).
-pub fn get_default_session_dir_path(cwd: &str) -> PathBuf {
+pub(crate) fn get_default_session_dir_path(cwd: &str) -> PathBuf {
     get_default_session_dir_path_in(cwd, &get_agent_dir())
 }
 
 /// Default session directory for a cwd, created if missing.
-pub fn get_default_session_dir(cwd: &str) -> Result<PathBuf> {
+pub(crate) fn get_default_session_dir(cwd: &str) -> Result<PathBuf> {
     let dir = get_default_session_dir_path(cwd);
     fs::create_dir_all(&dir).with_context(|| format!("creating session dir {}", dir.display()))?;
     Ok(dir)
@@ -651,7 +658,7 @@ fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Most recent (by mtime) session file in `dir`, optionally restricted to `cwd`.
-pub fn find_most_recent_session(dir: &Path, cwd: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn find_most_recent_session(dir: &Path, cwd: Option<&str>) -> Option<PathBuf> {
     let resolved_cwd = cwd.map(resolve_path);
     let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = jsonl_files(dir)
         .into_iter()
@@ -661,7 +668,7 @@ pub fn find_most_recent_session(dir: &Path, cwd: Option<&str>) -> Option<PathBuf
         })
         .filter_map(|p| fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| (p, t)))
         .collect();
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.1));
     candidates.into_iter().next().map(|(p, _)| p)
 }
 
@@ -801,7 +808,7 @@ fn session_context_settings(path: &[&SessionEntry]) -> (Option<String>, Option<(
 
 /// Project one selected entry into LLM/runtime messages. Plain `custom`
 /// entries are state/display only and produce nothing.
-pub fn session_entry_to_context_messages(entry: &SessionEntry) -> Vec<AgentMessage> {
+pub(crate) fn session_entry_to_context_messages(entry: &SessionEntry) -> Vec<AgentMessage> {
     match &entry.kind {
         EntryKind::Message { message } => vec![message.clone()],
         EntryKind::CustomMessage { custom_type, content, display, details } => vec![AgentMessage::Custom(CustomMessage {
@@ -839,7 +846,7 @@ pub fn session_entry_to_context_messages(entry: &SessionEntry) -> Vec<AgentMessa
 /// followed by the kept entries starting at `firstKeptEntryId` (system
 /// messages excluded, they are folded into the compaction's checkpoint) and
 /// every entry after the compaction.
-pub fn build_context_entries<'a>(entries: &'a [SessionEntry], leaf_id: Option<&str>) -> Vec<&'a SessionEntry> {
+pub(crate) fn build_context_entries<'a>(entries: &'a [SessionEntry], leaf_id: Option<&str>) -> Vec<&'a SessionEntry> {
     let index = build_index(entries);
     let path = build_session_path(&index, leaf_id);
     let Some(compaction_idx) = path.iter().rposition(|e| matches!(e.kind, EntryKind::Compaction { .. })) else {
@@ -863,7 +870,7 @@ pub fn build_context_entries<'a>(entries: &'a [SessionEntry], leaf_id: Option<&s
 }
 
 /// Messages + settings for the LLM, following the path from root to `leaf_id`.
-pub fn build_session_context(entries: &[SessionEntry], leaf_id: Option<&str>) -> SessionContext {
+pub(crate) fn build_session_context(entries: &[SessionEntry], leaf_id: Option<&str>) -> SessionContext {
     let index = build_index(entries);
     let path = build_session_path(&index, leaf_id);
     let (thinking_level, model) = session_context_settings(&path);
@@ -874,7 +881,7 @@ pub fn build_session_context(entries: &[SessionEntry], leaf_id: Option<&str>) ->
 /// Replay every system message into one message holding the current prompt
 /// and tools (port of pi-ai's `getCurrentSystemMessage`). Later `content` is
 /// appended to the base prompt, `sections` are patched by name.
-pub fn get_current_system_message(messages: &[AgentMessage]) -> Option<SystemMessage> {
+pub(crate) fn get_current_system_message(messages: &[AgentMessage]) -> Option<SystemMessage> {
     let mut content: Vec<String> = Vec::new();
     let mut sections: Vec<(String, String)> = Vec::new();
     let mut tools: Vec<Tool> = Vec::new();
@@ -928,7 +935,7 @@ pub fn get_current_system_message(messages: &[AgentMessage]) -> Option<SystemMes
 /// Manages one conversation session as an append-only tree stored in a JSONL
 /// file. See the module docs for the tree semantics.
 #[derive(Debug)]
-pub struct SessionManager {
+pub(crate) struct SessionManager {
     session_id: String,
     session_file: Option<PathBuf>,
     session_dir: PathBuf,
@@ -978,11 +985,11 @@ impl SessionManager {
     }
 
     /// New session in `session_dir` (default: `~/.pi/agent/sessions/--<cwd>--/`).
-    pub fn create(cwd: &str, session_dir: Option<&Path>) -> Result<Self> {
+    pub(crate) fn create(cwd: &str, session_dir: Option<&Path>) -> Result<Self> {
         Self::create_with_options(cwd, session_dir, &NewSessionOptions::default())
     }
 
-    pub fn create_with_options(cwd: &str, session_dir: Option<&Path>, options: &NewSessionOptions) -> Result<Self> {
+    pub(crate) fn create_with_options(cwd: &str, session_dir: Option<&Path>, options: &NewSessionOptions) -> Result<Self> {
         let dir = match session_dir {
             Some(d) => resolve_path(d),
             None => get_default_session_dir(cwd)?,
@@ -993,12 +1000,12 @@ impl SessionManager {
     /// Open an existing session file (or start a new session at that path if
     /// it does not exist yet). cwd comes from the header; the session dir is
     /// the file's parent directory.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with(path, None, None)
     }
 
     /// `open` with an explicit session dir (for `/new`) and/or cwd override.
-    pub fn open_with(path: impl AsRef<Path>, session_dir: Option<&Path>, cwd_override: Option<&str>) -> Result<Self> {
+    pub(crate) fn open_with(path: impl AsRef<Path>, session_dir: Option<&Path>, cwd_override: Option<&str>) -> Result<Self> {
         let resolved = resolve_path(path);
         let loaded = load_entries_from_file(&resolved)?;
         let cwd = match cwd_override {
@@ -1019,7 +1026,7 @@ impl SessionManager {
     }
 
     /// Continue the most recent session for `cwd`, or create a new one.
-    pub fn continue_recent(cwd: &str, session_dir: Option<&Path>) -> Result<Self> {
+    pub(crate) fn continue_recent(cwd: &str, session_dir: Option<&Path>) -> Result<Self> {
         let dir = match session_dir {
             Some(d) => resolve_path(d),
             None => get_default_session_dir(cwd)?,
@@ -1032,13 +1039,13 @@ impl SessionManager {
     }
 
     /// Session without file persistence.
-    pub fn in_memory(cwd: &str) -> Result<Self> {
+    pub(crate) fn in_memory(cwd: &str) -> Result<Self> {
         Self::blank(cwd, PathBuf::new(), false, &NewSessionOptions::default())
     }
 
     /// Reset to a brand-new session (new id, header, empty tree). Returns the
     /// new file path for persisted sessions. The file is created lazily.
-    pub fn new_session(&mut self, options: &NewSessionOptions) -> Result<Option<PathBuf>> {
+    pub(crate) fn new_session(&mut self, options: &NewSessionOptions) -> Result<Option<PathBuf>> {
         if let Some(id) = &options.id {
             assert_valid_session_id(id)?;
         }
@@ -1067,7 +1074,7 @@ impl SessionManager {
     }
 
     /// Switch to a different session file (used for resume and branching).
-    pub fn set_session_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
+    pub(crate) fn set_session_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
         let resolved = resolve_path(path);
         let loaded = load_entries_from_file(&resolved)?;
         self.set_session_file_preloaded(resolved, loaded)
@@ -1206,63 +1213,63 @@ impl SessionManager {
 
     // ----- accessors --------------------------------------------------------
 
-    pub fn is_persisted(&self) -> bool {
+    pub(crate) fn is_persisted(&self) -> bool {
         self.persist
     }
 
-    pub fn get_cwd(&self) -> &str {
+    pub(crate) fn get_cwd(&self) -> &str {
         &self.cwd
     }
 
-    pub fn get_session_dir(&self) -> &Path {
+    pub(crate) fn get_session_dir(&self) -> &Path {
         &self.session_dir
     }
 
-    pub fn get_session_id(&self) -> &str {
+    pub(crate) fn get_session_id(&self) -> &str {
         &self.session_id
     }
 
     /// `None` for in-memory sessions.
-    pub fn get_session_file(&self) -> Option<&Path> {
+    pub(crate) fn get_session_file(&self) -> Option<&Path> {
         self.session_file.as_deref()
     }
 
-    pub fn get_header(&self) -> &SessionHeader {
+    pub(crate) fn get_header(&self) -> &SessionHeader {
         &self.header
     }
 
     /// All entries in file order (header excluded).
-    pub fn get_entries(&self) -> &[SessionEntry] {
+    pub(crate) fn get_entries(&self) -> &[SessionEntry] {
         &self.entries
     }
 
-    pub fn get_leaf_id(&self) -> Option<&str> {
+    pub(crate) fn get_leaf_id(&self) -> Option<&str> {
         self.leaf_id.as_deref()
     }
 
-    pub fn get_leaf_entry(&self) -> Option<&SessionEntry> {
+    pub(crate) fn get_leaf_entry(&self) -> Option<&SessionEntry> {
         self.leaf_id.as_deref().and_then(|id| self.get_entry(id))
     }
 
-    pub fn get_entry(&self, id: &str) -> Option<&SessionEntry> {
+    pub(crate) fn get_entry(&self, id: &str) -> Option<&SessionEntry> {
         self.by_id.get(id).map(|&i| &self.entries[i])
     }
 
-    pub fn get_children(&self, parent_id: &str) -> Vec<&SessionEntry> {
+    pub(crate) fn get_children(&self, parent_id: &str) -> Vec<&SessionEntry> {
         self.entries.iter().filter(|e| e.parent_id.as_deref() == Some(parent_id)).collect()
     }
 
-    pub fn get_label(&self, id: &str) -> Option<&str> {
+    pub(crate) fn get_label(&self, id: &str) -> Option<&str> {
         self.labels.get(id).map(|(l, _)| l.as_str())
     }
 
     /// Path from root to the current leaf (all entry types).
-    pub fn get_branch(&self) -> Vec<&SessionEntry> {
+    pub(crate) fn get_branch(&self) -> Vec<&SessionEntry> {
         self.get_branch_from(self.leaf_id.as_deref())
     }
 
     /// Path from root to `from_id` (`None` -> empty).
-    pub fn get_branch_from(&self, from_id: Option<&str>) -> Vec<&SessionEntry> {
+    pub(crate) fn get_branch_from(&self, from_id: Option<&str>) -> Vec<&SessionEntry> {
         let mut path = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         let mut current = from_id.and_then(|id| self.get_entry(id));
@@ -1278,17 +1285,17 @@ impl SessionManager {
     }
 
     /// Active, compaction-aware entries for rendering.
-    pub fn build_context_entries(&self) -> Vec<&SessionEntry> {
+    pub(crate) fn build_context_entries(&self) -> Vec<&SessionEntry> {
         build_context_entries(&self.entries, self.leaf_id.as_deref())
     }
 
     /// Messages and settings for the LLM (current branch, compaction applied).
-    pub fn build_session_context(&self) -> SessionContext {
+    pub(crate) fn build_session_context(&self) -> SessionContext {
         build_session_context(&self.entries, self.leaf_id.as_deref())
     }
 
     /// Display name from the latest `session_info` entry (empty names clear it).
-    pub fn get_session_name(&self) -> Option<String> {
+    pub(crate) fn get_session_name(&self) -> Option<String> {
         self.entries.iter().rev().find_map(|e| match &e.kind {
             EntryKind::SessionInfo { name } => {
                 Some(name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(String::from))
@@ -1303,21 +1310,21 @@ impl SessionManager {
     /// entry id. Compaction and branch summaries must go through
     /// `append_compaction` / `append_branch_summary` so they stay top-level
     /// entries.
-    pub fn append_message(&mut self, message: AgentMessage) -> Result<String> {
+    pub(crate) fn append_message(&mut self, message: AgentMessage) -> Result<String> {
         self.append_entry(EntryKind::Message { message })
     }
 
-    pub fn append_thinking_level_change(&mut self, thinking_level: &str) -> Result<String> {
+    pub(crate) fn append_thinking_level_change(&mut self, thinking_level: &str) -> Result<String> {
         self.append_entry(EntryKind::ThinkingLevelChange { thinking_level: thinking_level.to_string() })
     }
 
-    pub fn append_model_change(&mut self, provider: &str, model_id: &str) -> Result<String> {
+    pub(crate) fn append_model_change(&mut self, provider: &str, model_id: &str) -> Result<String> {
         self.append_entry(EntryKind::ModelChange { provider: provider.to_string(), model_id: model_id.to_string() })
     }
 
     /// Record a compaction. The current system prompt/tool state is captured
     /// as the entry's `systemMessage` checkpoint, like pi does.
-    pub fn append_compaction(
+    pub(crate) fn append_compaction(
         &mut self,
         summary: &str,
         first_kept_entry_id: &str,
@@ -1327,7 +1334,7 @@ impl SessionManager {
         self.append_compaction_full(summary, first_kept_entry_id, tokens_before, details, None, None)
     }
 
-    pub fn append_compaction_full(
+    pub(crate) fn append_compaction_full(
         &mut self,
         summary: &str,
         first_kept_entry_id: &str,
@@ -1361,12 +1368,12 @@ impl SessionManager {
     }
 
     /// Extension state entry (not part of LLM context).
-    pub fn append_custom_entry(&mut self, custom_type: &str, data: Option<Value>) -> Result<String> {
+    pub(crate) fn append_custom_entry(&mut self, custom_type: &str, data: Option<Value>) -> Result<String> {
         self.append_entry(EntryKind::Custom { custom_type: custom_type.to_string(), data })
     }
 
     /// Extension message that participates in LLM context.
-    pub fn append_custom_message_entry(
+    pub(crate) fn append_custom_message_entry(
         &mut self,
         custom_type: &str,
         content: UserContent,
@@ -1377,16 +1384,16 @@ impl SessionManager {
     }
 
     /// Set the display name (`session_info` entry). Newlines are collapsed.
-    pub fn append_session_info(&mut self, name: &str) -> Result<String> {
+    pub(crate) fn append_session_info(&mut self, name: &str) -> Result<String> {
         self.append_entry(EntryKind::SessionInfo { name: Some(sanitize_name(name)) })
     }
 
-    pub fn set_session_name(&mut self, name: &str) -> Result<String> {
+    pub(crate) fn set_session_name(&mut self, name: &str) -> Result<String> {
         self.append_session_info(name)
     }
 
     /// Set (`Some(non-empty)`) or clear (`None` / empty) a label on an entry.
-    pub fn set_label(&mut self, target_id: &str, label: Option<&str>) -> Result<String> {
+    pub(crate) fn set_label(&mut self, target_id: &str, label: Option<&str>) -> Result<String> {
         if !self.by_id.contains_key(target_id) {
             bail!("Entry {target_id} not found");
         }
@@ -1404,7 +1411,7 @@ impl SessionManager {
     }
 
     /// Alias of `set_label` (pi: `appendLabelChange`).
-    pub fn append_label_change(&mut self, target_id: &str, label: Option<&str>) -> Result<String> {
+    pub(crate) fn append_label_change(&mut self, target_id: &str, label: Option<&str>) -> Result<String> {
         self.set_label(target_id, label)
     }
 
@@ -1412,7 +1419,7 @@ impl SessionManager {
 
     /// Move the leaf to an earlier entry; the next append becomes a sibling
     /// branch. Nothing is modified or deleted.
-    pub fn branch(&mut self, entry_id: &str) -> Result<()> {
+    pub(crate) fn branch(&mut self, entry_id: &str) -> Result<()> {
         if !self.by_id.contains_key(entry_id) {
             bail!("Entry {entry_id} not found");
         }
@@ -1421,14 +1428,14 @@ impl SessionManager {
     }
 
     /// Reset the leaf so the next append starts a new root.
-    pub fn reset_leaf(&mut self) {
+    pub(crate) fn reset_leaf(&mut self) {
         self.leaf_id = None;
     }
 
     /// Branch to `branch_from_id` (`None` = new root) and append a
     /// `branch_summary` entry describing the abandoned path (pi:
     /// `branchWithSummary`). Returns the new entry id.
-    pub fn append_branch_summary(
+    pub(crate) fn append_branch_summary(
         &mut self,
         branch_from_id: Option<&str>,
         summary: &str,
@@ -1437,7 +1444,7 @@ impl SessionManager {
         self.append_branch_summary_full(branch_from_id, summary, details, None, None)
     }
 
-    pub fn append_branch_summary_full(
+    pub(crate) fn append_branch_summary_full(
         &mut self,
         branch_from_id: Option<&str>,
         summary: &str,
@@ -1467,7 +1474,7 @@ impl SessionManager {
     /// session's cwd/session dir; its header's `parentSession` points at this
     /// file. `self` is left untouched. The file is created lazily (or right
     /// away when the path already holds an assistant message).
-    pub fn fork(&self, leaf_id: &str) -> Result<SessionManager> {
+    pub(crate) fn fork(&self, leaf_id: &str) -> Result<SessionManager> {
         let path = self.get_branch_from(Some(leaf_id));
         if path.is_empty() {
             bail!("Entry {leaf_id} not found");
@@ -1555,7 +1562,7 @@ impl SessionManager {
 
     /// Fork a session file from another project into `target_cwd`, copying the
     /// full history (pi: `forkFrom`).
-    pub fn fork_from(source_path: impl AsRef<Path>, target_cwd: &str, session_dir: Option<&Path>) -> Result<Self> {
+    pub(crate) fn fork_from(source_path: impl AsRef<Path>, target_cwd: &str, session_dir: Option<&Path>) -> Result<Self> {
         let source = resolve_path(source_path);
         let target_cwd = path_string(&resolve_path(target_cwd));
         let loaded = load_entries_from_file(&source)?
@@ -1592,7 +1599,7 @@ impl SessionManager {
     // ----- listing ----------------------------------------------------------
 
     /// Path of the session with exactly this id, without loading transcripts.
-    pub fn find_by_id(cwd: &str, id: &str, session_dir: Option<&Path>) -> Result<Option<PathBuf>> {
+    pub(crate) fn find_by_id(cwd: &str, id: &str, session_dir: Option<&Path>) -> Result<Option<PathBuf>> {
         let dir = match session_dir {
             Some(d) => resolve_path(d),
             None => get_default_session_dir(cwd)?,
@@ -1615,7 +1622,7 @@ impl SessionManager {
     /// Sessions for `cwd`, newest first. With a custom `session_dir` that is
     /// not the default dir for `cwd`, only sessions whose header cwd matches
     /// are returned.
-    pub fn list(cwd: &str, session_dir: Option<&Path>) -> Result<Vec<SessionInfo>> {
+    pub(crate) fn list(cwd: &str, session_dir: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let dir = match session_dir {
             Some(d) => resolve_path(d),
             None => get_default_session_dir(cwd)?,
@@ -1626,13 +1633,16 @@ impl SessionManager {
             .into_iter()
             .filter(|s| !filter_cwd || session_cwd_matches(&s.cwd, &resolved_cwd))
             .collect();
-        sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+        // `modified` has millisecond resolution, so two sessions created in the same
+        // millisecond tie; session ids are UUIDv7 with a per-process counter after the
+        // timestamp, so they break the tie in creation order.
+        sessions.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.id.cmp(&a.id)));
         Ok(sessions)
     }
 
     /// Sessions across all projects (every sub-directory of the sessions
     /// root), newest first. With `session_dir`, lists that directory only.
-    pub fn list_all(session_dir: Option<&Path>) -> Vec<SessionInfo> {
+    pub(crate) fn list_all(session_dir: Option<&Path>) -> Vec<SessionInfo> {
         let mut sessions = match session_dir {
             Some(d) => list_sessions_from_dir(&resolve_path(d)),
             None => {
@@ -1645,7 +1655,10 @@ impl SessionManager {
                     .collect()
             }
         };
-        sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+        // `modified` has millisecond resolution, so two sessions created in the same
+        // millisecond tie; session ids are UUIDv7 with a per-process counter after the
+        // timestamp, so they break the tie in creation order.
+        sessions.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.id.cmp(&a.id)));
         sessions
     }
 }

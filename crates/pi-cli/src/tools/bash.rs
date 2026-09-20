@@ -28,12 +28,12 @@ const BASH_UPDATE_THROTTLE_MS: u64 = 100;
 const EXIT_STDIO_GRACE_MS: u64 = 100;
 const TEMP_FILE_PREFIX: &str = "pi-bash";
 
-pub struct BashTool {
+pub(crate) struct BashTool {
     cwd: PathBuf,
 }
 
 impl BashTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }
@@ -42,7 +42,7 @@ impl BashTool {
 // Output accumulator
 // ---------------------------------------------------------------------------
 
-pub struct OutputSnapshot {
+pub(crate) struct OutputSnapshot {
     pub content: String,
     pub truncation: TruncationResult,
     pub full_output_path: Option<PathBuf>,

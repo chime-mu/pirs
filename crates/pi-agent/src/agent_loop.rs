@@ -169,7 +169,7 @@ async fn stream_assistant_response(
                     if let Some(last) = input.messages.last_mut() {
                         *last = AgentMessage::Assistant(p.clone());
                     }
-                    emit(AgentEvent::MessageUpdate { message: AgentMessage::Assistant(p.clone()), assistant_message_event: ev.clone() }).await;
+                    emit(AgentEvent::MessageUpdate { message: AgentMessage::Assistant(p.clone()), assistant_message_event: Box::new(ev.clone()) }).await;
                 }
             }
         }

@@ -16,12 +16,12 @@ use super::edit_diff::{
 };
 use super::path_utils::resolve_to_cwd;
 
-pub struct EditTool {
+pub(crate) struct EditTool {
     cwd: PathBuf,
 }
 
 impl EditTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }
@@ -34,7 +34,7 @@ fn is_single_edit_input(value: &Value) -> bool {
 /// - `edits` as a JSON string instead of an array
 /// - `edits` as a single edit object instead of a one-element array
 /// - legacy top-level `oldText`/`newText`
-pub fn prepare_edit_arguments(input: Value) -> Value {
+pub(crate) fn prepare_edit_arguments(input: Value) -> Value {
     let mut args: Map<String, Value> = match input {
         Value::Object(map) => map,
         other => return other,

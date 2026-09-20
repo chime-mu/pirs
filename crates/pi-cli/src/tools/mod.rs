@@ -8,50 +8,50 @@
 // `main.rs` uses it, everything here would otherwise trip `dead_code`.
 #![allow(dead_code)]
 
-pub mod bash;
-pub mod edit;
-pub mod edit_diff;
-pub mod find;
-pub mod grep;
-pub mod ls;
-pub mod path_utils;
-pub mod read;
-pub mod truncate;
-pub mod write;
+pub(crate) mod bash;
+pub(crate) mod edit;
+pub(crate) mod edit_diff;
+pub(crate) mod find;
+pub(crate) mod grep;
+pub(crate) mod ls;
+pub(crate) mod path_utils;
+pub(crate) mod read;
+pub(crate) mod truncate;
+pub(crate) mod write;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pi_agent::ToolRef;
 
-pub use bash::BashTool;
-pub use edit::EditTool;
-pub use find::FindTool;
-pub use grep::GrepTool;
-pub use ls::LsTool;
-pub use read::ReadTool;
-pub use write::WriteTool;
+pub(crate) use bash::BashTool;
+pub(crate) use edit::EditTool;
+pub(crate) use find::FindTool;
+pub(crate) use grep::GrepTool;
+pub(crate) use ls::LsTool;
+pub(crate) use read::ReadTool;
+pub(crate) use write::WriteTool;
 
 /// Options shared by all built-in tools.
 #[derive(Debug, Clone)]
-pub struct ToolOptions {
+pub(crate) struct ToolOptions {
     /// Working directory relative paths are resolved against.
     pub cwd: PathBuf,
 }
 
 /// pi's default tool selection.
-pub const DEFAULT_TOOL_NAMES: &[&str] = &["read", "bash", "edit", "write"];
+pub(crate) const DEFAULT_TOOL_NAMES: &[&str] = &["read", "bash", "edit", "write"];
 
 /// Every built-in tool, in the order `builtin_tools` returns them.
-pub const ALL_TOOL_NAMES: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
+pub(crate) const ALL_TOOL_NAMES: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 /// All built-in tools: read, bash, edit, write, grep, find, ls (in that order).
-pub fn builtin_tools(cwd: &Path) -> Vec<ToolRef> {
+pub(crate) fn builtin_tools(cwd: &Path) -> Vec<ToolRef> {
     ALL_TOOL_NAMES.iter().filter_map(|name| tool_by_name(cwd, name)).collect()
 }
 
 /// Look up a single built-in tool by name.
-pub fn tool_by_name(cwd: &Path, name: &str) -> Option<ToolRef> {
+pub(crate) fn tool_by_name(cwd: &Path, name: &str) -> Option<ToolRef> {
     let cwd = cwd.to_path_buf();
     let tool: ToolRef = match name {
         "read" => Arc::new(ReadTool::new(cwd)),
@@ -103,7 +103,7 @@ pub(crate) mod test_support {
     use std::sync::{Arc, Mutex};
 
     /// An `on_update` callback that records every partial result.
-    pub fn recording_update() -> (UpdateFn, Arc<Mutex<Vec<ToolResult>>>) {
+    pub(crate) fn recording_update() -> (UpdateFn, Arc<Mutex<Vec<ToolResult>>>) {
         let store: Arc<Mutex<Vec<ToolResult>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = store.clone();
         let f: UpdateFn = Arc::new(move |r| {
@@ -114,12 +114,12 @@ pub(crate) mod test_support {
         (f, store)
     }
 
-    pub fn noop_update() -> UpdateFn {
+    pub(crate) fn noop_update() -> UpdateFn {
         Arc::new(|_| {})
     }
 
     /// Text of the first content block.
-    pub fn first_text(result: &ToolResult) -> String {
+    pub(crate) fn first_text(result: &ToolResult) -> String {
         match result.content.first() {
             Some(pi_ai::Content::Text { text, .. }) => text.clone(),
             _ => String::new(),

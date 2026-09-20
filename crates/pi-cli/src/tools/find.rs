@@ -17,12 +17,12 @@ use super::{arg_str, arg_usize};
 
 const DEFAULT_LIMIT: usize = 1000;
 
-pub struct FindTool {
+pub(crate) struct FindTool {
     cwd: PathBuf,
 }
 
 impl FindTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }

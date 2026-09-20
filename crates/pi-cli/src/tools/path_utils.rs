@@ -10,7 +10,7 @@ fn is_unicode_space(c: char) -> bool {
 
 /// Normalize user-supplied path text: collapse unicode spaces, strip a leading
 /// `@`, expand `~`, and unwrap `file://` URLs.
-pub fn expand_path(input: &str) -> PathBuf {
+pub(crate) fn expand_path(input: &str) -> PathBuf {
     let mut normalized: String = input.chars().map(|c| if is_unicode_space(c) { ' ' } else { c }).collect();
     if let Some(rest) = normalized.strip_prefix('@') {
         normalized = rest.to_string();
@@ -58,13 +58,13 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 }
 
 /// Resolve a path relative to `cwd`, handling `~` and absolute paths.
-pub fn resolve_to_cwd(path: &str, cwd: &Path) -> PathBuf {
+pub(crate) fn resolve_to_cwd(path: &str, cwd: &Path) -> PathBuf {
     let expanded = expand_path(path);
     let joined = if expanded.is_absolute() { expanded } else { expand_tilde(&cwd.to_string_lossy()).join(expanded) };
     normalize_lexically(&joined)
 }
 
-pub fn path_exists(path: &Path) -> bool {
+pub(crate) fn path_exists(path: &Path) -> bool {
     path.exists()
 }
 
@@ -91,7 +91,7 @@ fn try_curly_quote_variant(path: &str) -> String {
 
 /// Resolve a path for reading, trying macOS screenshot naming variants when
 /// the literal path does not exist.
-pub fn resolve_read_path(path: &str, cwd: &Path) -> PathBuf {
+pub(crate) fn resolve_read_path(path: &str, cwd: &Path) -> PathBuf {
     let resolved = resolve_to_cwd(path, cwd);
     if resolved.exists() {
         return resolved;
@@ -109,7 +109,7 @@ pub fn resolve_read_path(path: &str, cwd: &Path) -> PathBuf {
 }
 
 /// Relative posix-style path of `path` under `root`, if it is inside it.
-pub fn relative_posix(path: &Path, root: &Path) -> Option<String> {
+pub(crate) fn relative_posix(path: &Path, root: &Path) -> Option<String> {
     let rel = path.strip_prefix(root).ok()?;
     let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
     Some(parts.join("/"))

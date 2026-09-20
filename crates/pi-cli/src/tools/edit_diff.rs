@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Result};
 use similar::{ChangeTag, DiffOp, TextDiff};
 
-pub fn detect_line_ending(content: &str) -> &'static str {
+pub(crate) fn detect_line_ending(content: &str) -> &'static str {
     let lf_idx = match content.find('\n') {
         Some(i) => i,
         None => return "\n",
@@ -14,11 +14,11 @@ pub fn detect_line_ending(content: &str) -> &'static str {
     }
 }
 
-pub fn normalize_to_lf(text: &str) -> String {
+pub(crate) fn normalize_to_lf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-pub fn restore_line_endings(text: &str, ending: &str) -> String {
+pub(crate) fn restore_line_endings(text: &str, ending: &str) -> String {
     if ending == "\r\n" {
         text.replace('\n', "\r\n")
     } else {
@@ -27,7 +27,7 @@ pub fn restore_line_endings(text: &str, ending: &str) -> String {
 }
 
 /// Split a leading UTF-8 byte order mark from decoded text.
-pub fn split_bom(content: &str) -> (&str, &str) {
+pub(crate) fn split_bom(content: &str) -> (&str, &str) {
     match content.strip_prefix('\u{FEFF}') {
         Some(rest) => ("\u{FEFF}", rest),
         None => ("", content),
@@ -41,7 +41,7 @@ pub fn split_bom(content: &str) -> (&str, &str) {
 /// - Normalize special Unicode spaces to regular space
 ///
 /// (pi additionally applies NFKC normalization; that is not ported.)
-pub fn normalize_for_fuzzy_match(text: &str) -> String {
+pub(crate) fn normalize_for_fuzzy_match(text: &str) -> String {
     let trimmed = text.split('\n').map(str::trim_end).collect::<Vec<_>>().join("\n");
     trimmed
         .chars()
@@ -78,7 +78,7 @@ struct LineSpan {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextReplacement {
+pub(crate) struct TextReplacement {
     pub match_index: usize,
     pub match_length: usize,
     pub new_text: String,
@@ -135,7 +135,7 @@ fn apply_replacements(content: &str, replacements: &[TextReplacement], offset: u
 
 /// Apply replacements matched against `base_content` to `original_content`
 /// while preserving unchanged line blocks from the original.
-pub fn apply_replacements_preserving_unchanged_lines(
+pub(crate) fn apply_replacements_preserving_unchanged_lines(
     original_content: &str,
     base_content: &str,
     replacements: &[TextReplacement],
@@ -184,19 +184,19 @@ pub fn apply_replacements_preserving_unchanged_lines(
 }
 
 #[derive(Debug, Clone)]
-pub struct Edit {
+pub(crate) struct Edit {
     pub old_text: String,
     pub new_text: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct AppliedEditsResult {
+pub(crate) struct AppliedEditsResult {
     pub base_content: String,
     pub new_content: String,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FuzzyMatch {
+pub(crate) struct FuzzyMatch {
     /// Byte index where the match starts (in exact or fuzzy-normalized content).
     pub index: usize,
     pub match_length: usize,
@@ -206,7 +206,7 @@ pub struct FuzzyMatch {
 
 /// Find `old_text` in `content`, trying an exact match first, then a fuzzy match.
 /// A fuzzy match returns offsets in fuzzy-normalized space.
-pub fn fuzzy_find_text(content: &str, old_text: &str) -> Option<FuzzyMatch> {
+pub(crate) fn fuzzy_find_text(content: &str, old_text: &str) -> Option<FuzzyMatch> {
     if let Some(index) = content.find(old_text) {
         return Some(FuzzyMatch { index, match_length: old_text.len(), used_fuzzy_match: false });
     }
@@ -263,7 +263,7 @@ fn no_change_error(path: &str, total: usize) -> anyhow::Error {
 /// reverse offset order so offsets stay stable. If any edit needs fuzzy
 /// matching, replacements are computed in fuzzy-normalized space and overlaid
 /// onto the original so unchanged lines keep their original bytes.
-pub fn apply_edits_to_normalized_content(normalized_content: &str, edits: &[Edit], path: &str) -> Result<AppliedEditsResult> {
+pub(crate) fn apply_edits_to_normalized_content(normalized_content: &str, edits: &[Edit], path: &str) -> Result<AppliedEditsResult> {
     let normalized_edits: Vec<Edit> = edits
         .iter()
         .map(|e| Edit { old_text: normalize_to_lf(&e.old_text), new_text: normalize_to_lf(&e.new_text) })
@@ -322,7 +322,7 @@ pub fn apply_edits_to_normalized_content(normalized_content: &str, edits: &[Edit
 }
 
 /// Generate a standard unified patch.
-pub fn generate_unified_patch(path: &str, old_content: &str, new_content: &str, context_lines: usize) -> String {
+pub(crate) fn generate_unified_patch(path: &str, old_content: &str, new_content: &str, context_lines: usize) -> String {
     TextDiff::from_lines(old_content, new_content)
         .unified_diff()
         .context_radius(context_lines)
@@ -331,7 +331,7 @@ pub fn generate_unified_patch(path: &str, old_content: &str, new_content: &str, 
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiffString {
+pub(crate) struct DiffString {
     pub diff: String,
     pub first_changed_line: Option<usize>,
 }
@@ -380,7 +380,7 @@ fn diff_parts(old_content: &str, new_content: &str) -> Vec<DiffPart> {
 
 /// Generate a display-oriented diff string with line numbers and context.
 /// Returns both the diff string and the first changed line number (in the new file).
-pub fn generate_diff_string(old_content: &str, new_content: &str, context_lines: usize) -> DiffString {
+pub(crate) fn generate_diff_string(old_content: &str, new_content: &str, context_lines: usize) -> DiffString {
     let parts = diff_parts(old_content, new_content);
     let mut output: Vec<String> = Vec::new();
 

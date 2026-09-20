@@ -8,20 +8,20 @@
 
 use serde::Serialize;
 
-pub const DEFAULT_MAX_LINES: usize = 2000;
-pub const DEFAULT_MAX_BYTES: usize = 50 * 1024; // 50KB
-pub const GREP_MAX_LINE_LENGTH: usize = 500; // Max chars per grep match line
+pub(crate) const DEFAULT_MAX_LINES: usize = 2000;
+pub(crate) const DEFAULT_MAX_BYTES: usize = 50 * 1024; // 50KB
+pub(crate) const GREP_MAX_LINE_LENGTH: usize = 500; // Max chars per grep match line
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum TruncatedBy {
+pub(crate) enum TruncatedBy {
     Lines,
     Bytes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TruncationResult {
+pub(crate) struct TruncationResult {
     /// The truncated content
     pub content: String,
     /// Whether truncation occurred
@@ -47,7 +47,7 @@ pub struct TruncationResult {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct TruncationOptions {
+pub(crate) struct TruncationOptions {
     pub max_lines: usize,
     pub max_bytes: usize,
 }
@@ -60,7 +60,7 @@ impl Default for TruncationOptions {
 
 impl TruncationOptions {
     /// Byte limit only (used where an item count already caps the rows).
-    pub fn bytes_only() -> Self {
+    pub(crate) fn bytes_only() -> Self {
         Self { max_lines: usize::MAX, max_bytes: DEFAULT_MAX_BYTES }
     }
 }
@@ -77,7 +77,7 @@ fn split_lines_for_counting(content: &str) -> Vec<&str> {
 }
 
 /// Format bytes as human-readable size.
-pub fn format_size(bytes: usize) -> String {
+pub(crate) fn format_size(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{bytes}B")
     } else if bytes < 1024 * 1024 {
@@ -108,7 +108,7 @@ fn untruncated(content: &str, total_lines: usize, total_bytes: usize, opts: Trun
 ///
 /// Never returns partial lines. If the first line exceeds the byte limit,
 /// returns empty content with `first_line_exceeds_limit = true`.
-pub fn truncate_head(content: &str, opts: TruncationOptions) -> TruncationResult {
+pub(crate) fn truncate_head(content: &str, opts: TruncationOptions) -> TruncationResult {
     let TruncationOptions { max_lines, max_bytes } = opts;
     let total_bytes = content.len();
     let lines = split_lines_for_counting(content);
@@ -174,7 +174,7 @@ pub fn truncate_head(content: &str, opts: TruncationOptions) -> TruncationResult
 /// Suitable for bash output where you want to see the end (errors, final results).
 ///
 /// May return a partial first line if the last line of the original content exceeds the byte limit.
-pub fn truncate_tail(content: &str, opts: TruncationOptions) -> TruncationResult {
+pub(crate) fn truncate_tail(content: &str, opts: TruncationOptions) -> TruncationResult {
     let TruncationOptions { max_lines, max_bytes } = opts;
     let total_bytes = content.len();
     let lines = split_lines_for_counting(content);
@@ -245,7 +245,7 @@ fn truncate_str_to_bytes_from_end(s: &str, max_bytes: usize) -> &str {
 
 /// Truncate a single line to `max_chars` characters, adding a `[truncated]` suffix.
 /// Used for grep match lines. Returns the text and whether it was truncated.
-pub fn truncate_line(line: &str, max_chars: usize) -> (String, bool) {
+pub(crate) fn truncate_line(line: &str, max_chars: usize) -> (String, bool) {
     if line.chars().count() <= max_chars {
         return (line.to_string(), false);
     }

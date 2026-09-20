@@ -247,7 +247,7 @@ pub enum AgentEvent {
     TurnEnd { message: AgentMessage, tool_results: Vec<ToolResultMessage> },
     MessageStart { message: AgentMessage },
     #[serde(rename_all = "camelCase")]
-    MessageUpdate { message: AgentMessage, assistant_message_event: AssistantMessageEvent },
+    MessageUpdate { message: AgentMessage, assistant_message_event: Box<AssistantMessageEvent> },
     MessageEnd { message: AgentMessage },
     #[serde(rename_all = "camelCase")]
     ToolExecutionStart { tool_call_id: String, tool_name: String, args: Value },

@@ -1,5 +1,7 @@
 //! pirs: a Rust port of the pi coding agent.
 
+#![deny(unreachable_pub)]
+
 mod agent_session;
 mod modes;
 mod session;
@@ -110,7 +112,8 @@ async fn async_main() -> i32 {
         .as_deref()
         .or(settings.default_thinking_level.as_deref())
         .and_then(ThinkingLevel::parse)
-        .unwrap_or(if model.reasoning { ThinkingLevel::Off } else { ThinkingLevel::Off });
+        // TODO: a reasoning model probably meant a non-Off default here (was `if model.reasoning { Off } else { Off }`).
+        .unwrap_or(ThinkingLevel::Off);
 
     let cwd_str = cwd.to_string_lossy().to_string();
     let session_dir = args.session_dir.as_deref();

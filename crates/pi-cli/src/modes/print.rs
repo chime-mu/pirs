@@ -8,14 +8,14 @@ use serde_json::json;
 use std::io::Write;
 use std::sync::Mutex;
 
-pub struct PrintUi {
+pub(crate) struct PrintUi {
     pub json: bool,
     pub last_assistant_text: Mutex<Option<String>>,
     pub errors: Mutex<Vec<String>>,
 }
 
 impl PrintUi {
-    pub fn new(json: bool) -> Self {
+    pub(crate) fn new(json: bool) -> Self {
         PrintUi { json, last_assistant_text: Mutex::new(None), errors: Mutex::new(Vec::new()) }
     }
 }
@@ -37,7 +37,7 @@ impl UiBackend for PrintUi {
                         let _ = writeln!(out, "{v}");
                     }
                 }
-                if let AgentEvent::MessageEnd { message: AgentMessage::Assistant(a) } = ev {
+                if let AgentEvent::MessageEnd { message: AgentMessage::Assistant(a) } = &**ev {
                     if let Some(err) = &a.error_message {
                         self.errors.lock().unwrap().push(err.clone());
                     }
@@ -81,7 +81,7 @@ impl UiBackend for PrintUi {
 }
 
 /// Run one or more prompts and print the result. Returns the process exit code.
-pub async fn run(session: &AgentSession, ui: &PrintUi, prompts: Vec<String>) -> i32 {
+pub(crate) async fn run(session: &AgentSession, ui: &PrintUi, prompts: Vec<String>) -> i32 {
     for p in prompts {
         if let Err(e) = session.submit(p, Vec::new(), None).await {
             eprintln!("error: {e}");

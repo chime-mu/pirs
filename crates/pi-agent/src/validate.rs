@@ -62,10 +62,10 @@ fn validate_at(schema: &Value, value: &Value, path: &str) -> Result<(), String> 
                 return Err(format!("{label} must be of type {t}, got {}", type_name(value)));
             }
         }
-        Some(Value::Array(ts)) => {
-            if !ts.iter().any(|t| t.as_str().map(|t| matches_type(t, value)).unwrap_or(true)) {
-                return Err(format!("{label} has invalid type {}", type_name(value)));
-            }
+        Some(Value::Array(ts))
+            if !ts.iter().any(|t| t.as_str().map(|t| matches_type(t, value)).unwrap_or(true)) =>
+        {
+            return Err(format!("{label} has invalid type {}", type_name(value)));
         }
         _ => {}
     }

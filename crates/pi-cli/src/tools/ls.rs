@@ -15,12 +15,12 @@ use super::truncate::{format_size, truncate_head, TruncationOptions, DEFAULT_MAX
 
 const DEFAULT_LIMIT: usize = 500;
 
-pub struct LsTool {
+pub(crate) struct LsTool {
     cwd: PathBuf,
 }
 
 impl LsTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
 }

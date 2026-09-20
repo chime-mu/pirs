@@ -26,20 +26,20 @@ use unicode_width::UnicodeWidthStr;
 // Backend (called from the session / extension host threads)
 // ---------------------------------------------------------------------------
 
-pub enum DialogKind {
+pub(crate) enum DialogKind {
     Select { options: Vec<String> },
     Confirm { message: String },
     Input { placeholder: String },
 }
 
-pub struct DialogRequest {
+pub(crate) struct DialogRequest {
     pub title: String,
     pub kind: DialogKind,
     pub timeout_ms: Option<u64>,
     pub reply: oneshot::Sender<Option<String>>,
 }
 
-pub struct TuiBackend {
+pub(crate) struct TuiBackend {
     tx: mpsc::UnboundedSender<UiEvent>,
     rx: Mutex<Option<mpsc::UnboundedReceiver<UiEvent>>>,
     dialog_tx: mpsc::UnboundedSender<DialogRequest>,
@@ -54,7 +54,7 @@ impl Default for TuiBackend {
 }
 
 impl TuiBackend {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let (dialog_tx, dialog_rx) = mpsc::unbounded_channel();
         TuiBackend { tx, rx: Mutex::new(Some(rx)), dialog_tx, dialog_rx: Mutex::new(Some(dialog_rx)), editor_text: Arc::new(Mutex::new(String::new())) }
@@ -495,7 +495,7 @@ fn help_text() -> String {
     .join("\n")
 }
 
-pub async fn run(session: AgentSession, tui: Arc<TuiBackend>, initial: Option<String>, loaded: &[pi_ext::LoadedExtension], failures: &[(std::path::PathBuf, String)]) -> i32 {
+pub(crate) async fn run(session: AgentSession, tui: Arc<TuiBackend>, initial: Option<String>, loaded: &[pi_ext::LoadedExtension], failures: &[(std::path::PathBuf, String)]) -> i32 {
     let mut rx = tui.rx.lock().unwrap().take().expect("ui receiver");
     let mut dialog_rx = tui.dialog_rx.lock().unwrap().take().expect("dialog receiver");
 
@@ -807,10 +807,8 @@ async fn handle_key(session: &AgentSession, ui: &mut Ui, key: KeyEvent, width: u
                 ui.history_prev();
             }
         }
-        KeyCode::Down => {
-            if !ui.input[ui.cursor..].contains('\n') {
-                ui.history_next();
-            }
+        KeyCode::Down if !ui.input[ui.cursor..].contains('\n') => {
+            ui.history_next();
         }
         _ => {}
     }
@@ -820,7 +818,7 @@ async fn handle_key(session: &AgentSession, ui: &mut Ui, key: KeyEvent, width: u
 async fn handle_ui_event(session: &AgentSession, ui: &mut Ui, event: UiEvent, width: usize) {
     let dim = Style::default().fg(Color::DarkGray);
     match event {
-        UiEvent::Agent(ev) => handle_agent_event(session, ui, ev, width).await,
+        UiEvent::Agent(ev) => handle_agent_event(session, ui, *ev, width).await,
         UiEvent::Notify { message, kind } => {
             let style = match kind.as_str() {
                 "error" => Style::default().fg(Color::Red),
