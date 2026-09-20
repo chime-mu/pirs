@@ -1,35 +1,37 @@
 # Handoff
 
-Updated 2026-09-20. Read this first, then `docs/design/adaptable.md` if you are continuing
-the design discussion, `STATUS.md` for the feature inventory, and `docs/extensions.md` for
+Updated 2026-09-21. Read this first, then `docs/design/PLAN.md` if you are executing the design and
+`docs/design/README.md` if you are discussing it, `STATUS.md` for the feature inventory, and `docs/extensions.md` for
 the current (pi-compatible) extension API.
 
-## Design discussion in progress (2026-09-19/20)
+## Design: settled, ready to execute (2026-09-21)
 
-`docs/design/adaptable.md` is the live document: a proposal to turn pirs from a pi port into
-a headless loop server plus protocol, a declarative policy DSL, and clients. It is still a
-draft, but the last two sessions settled these points; do not reopen them without a reason:
+The design lives in `docs/design/`, split into layers; start at `docs/design/README.md`.
+Every argument is in `docs/design/90-decisions.md` (37 entries: 34 accepted, 3 superseded,
+none proposed). The layer files state without arguing; do not re-argue a settled entry
+without new evidence, and record any change as a new entry first.
 
-- **Architecture is components behind protocols.** Loop server (core; `pi-ai` stays inside
-  it, on the server side of every boundary), extension executables, an optional and separate
-  pty server (tmux until then, never inside the loop server), and the TUI as one client.
-- **No security checks inside the loop.** The `[[guard]]` slot and `tool_call` handler were
-  removed on purpose after discussing sandbox escapes; an in-process check is a smokescreen.
-  Containment is a boundary around the *server* (container, VM, ssh); see "Containment".
-- **Bet #1 is grounded in Claude Code hooks/permissions/CLAUDE.md, not pi's examples**,
-  which are only an expressiveness corpus.
-- **TUI = sidebar of agents across servers + pages** (`agent`, `file` via read-only
-  `fs.read`/`fs.changed`, later `terminal`). Page arrangement (splits, tabs, saved layouts —
-  herdr's window features) is the client's business, buildable any time, not specified.
-  Editing is `$EDITOR` shell-out or the agent. The user wants those window features to remain
-  buildable; the doc must not foreclose them.
-- **Crate carve-up and mechanical checks** (`pirs-protocol`, `pirs-client`, `cargo metadata`
-  edge test, `cargo-deny` wrappers with terminal-emulator crates banned, per-crate clippy
-  lints, protocol schema snapshot) are part of phase 0.
+**`docs/design/PLAN.md` is the execution plan.** A fresh Fable session runs it end to end:
+phases 0–7, Opus subagents for implementation, Fable subagents for the advanced pieces and
+for a review before each phase commit, on branch `adaptable`, one commit per phase, an
+acceptance script per phase under `scripts/acceptance/`. Read the plan's "Authority" and
+"Division of labour" sections before starting anything. When the run is done, this file is
+rewritten as the plan's last section says.
 
-Nothing from the proposal is implemented. Next step, once the user accepts the draft, is
-phase 0: `docs/protocol.md`, `docs/dsl.md`, the crate carve-up and the two tests. The
-"Suggested next work" list at the bottom predates this and assumes the pi-port direction.
+Points most likely to be misread by someone arriving cold:
+
+- **No checks inside the loop, and no dialogs.** Only the model asks the user anything, in
+  text; status is `working` or `idle`; structured questions are an `ask` tool plus a UI
+  render hook (D-19, D-37).
+- **One vocabulary, two bindings.** Every DSL `run` is a called process; long-lived
+  extensions are connected clients started from `on start` (D-16, D-23).
+- **The loop server never renders, never listens on the network, never interprets a path.**
+  Bridges (`pirs proxy`, a future web bridge) are separate and own their login (D-31, D-36).
+- **pi compatibility is gone**: `pi-ext` and `examples/extensions/` are deleted in phase 4;
+  the session *format* stays, the directory moves to `~/.pirs/`.
+
+The rendered design is a private page at https://claude.ai/artifact/9gZcPT15MuH5bCqbUSdneU;
+`docs/design/page.py` rebuilds it from the files.
 
 ## Toolchain
 
@@ -102,6 +104,8 @@ itself) and are intentionally not committed. Decide whether to keep, move, or de
 - `PIRS_TRACE=1` prints dispatch timings to stderr; useful for latency questions.
 
 ## Suggested next work (in order)
+
+Superseded by `docs/design/PLAN.md`; kept for the pi-port direction only.
 
 1. Move the pi examples path to an env var and add a CI-friendly fixture set.
 2. Compaction (auto and `/compact`), then `/tree` and `/fork` in the TUI. The session manager

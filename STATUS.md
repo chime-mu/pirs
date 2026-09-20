@@ -162,7 +162,7 @@ TypeScript extension model can run from a Rust host. Both are done.
   `sweep` example; those tests skip when it is absent.
 
 ## Suggested next steps
-A redesign is under discussion in `docs/design/adaptable.md` (loop server + protocol + DSL,
+A redesign is under discussion in `docs/design/` (start at `00-north-star.md`) (loop server + protocol + DSL,
 components behind protocols); if adopted, its phase 0 supersedes this list. See `HANDOFF.md`.
 
 1. Live-test the OpenAI provider with a real key; try thinking levels and tool-heavy sessions
