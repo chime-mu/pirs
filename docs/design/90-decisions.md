@@ -347,3 +347,17 @@ request, `loop.list { cwd? }` returns `{ loops, conversations }`, where `convers
 the server's list of stored conversations for `cwd` (id, name, cwd, path, updated) and is
 empty when `cwd` is absent. `loop.create { session }` continues one by id. Evidence: the
 phase 1 acceptance script (`pirs --list` shows two conversations) cannot be written otherwise.
+
+**D-39 · proposed · 2026-09-21 · `fs.read` serves the requested path in full; refs appear in events.**
+Recorded by the orchestrator during phase 1. `30-protocol.md` says `fs.read` "returns content or
+`{ ref, bytes }` above the threshold, and a `ref` is itself a server path that `fs.read` serves"
+(D-11). Read literally, `fs.read` on any file above 64 KB returns a ref naming that same file,
+which `fs.read` would again answer with a ref: a file page (S13) could never show a file over
+the threshold. The threshold exists to keep unsolicited lines small (events, tool results); an
+explicit read is the client asking for the bytes. So: by-reference payloads are produced by
+the server for tool results and messages above the threshold, written under the loop's
+session directory, and carried in events as `{ ref, bytes }`; `fs.read { loop, path }`
+returns the content of `path` whether it is a ref or an ordinary file, refusing only files
+above a hard cap (16 MB, `INVALID_PARAMS`). The `{ ref, bytes }` form stays in the schema as
+the shape of a by-reference payload. Evidence: the phase 1 acceptance ("a >64 KB scripted tool
+result arrives as a `ref` and `fs.read` returns it") is satisfiable only this way.

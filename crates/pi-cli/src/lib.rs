@@ -1,4 +1,10 @@
 //! pirs: a Rust port of the pi coding agent.
+//!
+//! For phases 1-3 this crate is a library rather than a binary: the `pirs`
+//! bin calls [`run`] for `pirs tui`, which is the old in-process interactive
+//! mode. The server-side half of this code now lives in `pirs-server`
+//! (D-04); this crate is deleted at the end of phase 3, once `pirs-tui`
+//! speaks the protocol.
 
 #![deny(unreachable_pub)]
 
@@ -74,14 +80,17 @@ struct Args {
     list_extensions: bool,
 }
 
-fn main() {
+/// Build a runtime and run the old CLI with `args` (`args[0]` is the program
+/// name, as `std::env::args` produces it). Returns the process exit code.
+pub fn main_blocking(args: Vec<String>) -> i32 {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
-    let code = rt.block_on(async_main());
-    std::process::exit(code);
+    rt.block_on(run(args))
 }
 
-async fn async_main() -> i32 {
-    let args = Args::parse();
+/// Run the old CLI with `args` on the caller's runtime. Returns the exit code
+/// instead of exiting, so the caller decides what happens next.
+pub async fn run(args: Vec<String>) -> i32 {
+    let args = Args::parse_from(args);
     let cwd = match &args.cwd {
         Some(c) => c.clone(),
         None => std::env::current_dir().expect("cwd"),

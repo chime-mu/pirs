@@ -16,13 +16,15 @@
 //! normal deps only, so a dev-dep cycle would be legal and is exactly the kind
 //! of thing this table is here to catch.
 //!
-//! **Phase 1 moves this file to `crates/pirs/tests/`** (it lives here only
-//! because `pirs-protocol` is the first crate of the new layering). The rows
-//! phase 1 adds: `pirs-server` → `{pi-ai, pi-agent, pirs-protocol}`,
-//! `pirs-client` → `{pirs-protocol}`, `pirs` → all of the above plus `pi-cli`;
-//! `pi-cli`'s own row is unchanged. Phase 3 adds `pirs-tui` →
-//! `{pirs-protocol, pirs-client}` and, at its end, deletes the `pi-cli` row;
-//! phase 4 deletes the `pi-ext` row. Edit `EXPECTED` and nothing else.
+//! **This file lived in `crates/pirs-protocol/tests/` in phase 0** and moved
+//! here in phase 1, now that `pirs` is the crate that depends on all the
+//! others. Phase 3 adds `pirs-tui` → `{pirs-protocol, pirs-client}` and, at
+//! its end, deletes the `pi-cli` row (D-04); phase 4 deletes the `pi-ext`
+//! row. Edit `EXPECTED` and nothing else.
+//!
+//! `pi-cli` is the phase 1-3 stopgap: `pirs tui` runs the old in-process
+//! interactive mode by calling into it, which is why `pirs` depends on a
+//! crate the finished architecture does not have.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -37,9 +39,12 @@ const EXPECTED: &[(&str, &[&str])] = &[
     ("pi-ext", &["pi-ai", "pi-agent"]),
     ("pi-cli", &["pi-ai", "pi-agent", "pi-ext"]),
     ("pirs-protocol", &[]),
+    ("pirs-server", &["pi-ai", "pi-agent", "pirs-protocol"]),
+    ("pirs-client", &["pirs-protocol"]),
+    ("pirs", &["pirs-protocol", "pirs-client", "pirs-server", "pi-cli"]),
 ];
 
-/// The workspace root: two levels up from `crates/pirs-protocol`.
+/// The workspace root: two levels up from `crates/pirs`.
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -131,7 +136,7 @@ fn internal_dependencies_match_the_architecture_table() {
         let Some((_, expected_deps)) = EXPECTED.iter().find(|(n, _)| n == name) else {
             failures.push(format!(
                 "workspace member `{name}` is not in EXPECTED: classify it in \
-                 crates/pirs-protocol/tests/architecture.rs (and in the \"Crates\" \
+                 crates/pirs/tests/architecture.rs (and in the \"Crates\" \
                  table of docs/design/20-architecture.md) by adding a row naming \
                  the workspace members it may depend on. Its current internal \
                  dependencies are {}.",

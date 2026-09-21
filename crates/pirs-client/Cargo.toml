@@ -1,0 +1,17 @@
+[package]
+name = "pirs-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The pirs client library: socket discovery, server auto-start, hello, request/response, event and slot streams."
+
+[dependencies]
+pirs-protocol = { path = "../pirs-protocol" }
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+tracing.workspace = true

@@ -330,11 +330,26 @@ As a called process, the same `input` handler reads and writes bare payloads:
 Any single content above **64 KB** travels by reference: the server writes it to the loop's
 session directory and sends `{ "ref": <path>, "bytes": <n> }` instead. Every line stays
 small, and a remote client fetches only what it will show. A `ref` is itself a server path,
-and `fs.read` serves it (D-11) in full, whatever its size:
+and `fs.read` serves it (D-11, D-39) in full, whatever its size.
+
+Phase 1 produces refs for one thing: a text block of a tool result. The session log keeps
+the full text (the model reads it); the *event* — `loop.message`, and the copies inside
+`loop.turn_end` and `loop.run_end` — replaces that block's `text` with `"[by reference]"`
+and adds the reference to the message's `details`, which is free-form and not sent to the
+model. `details.ref` is the `{ ref, bytes }` of the first oversized block (the usual
+one-block case); `details.refs` lists every oversized block with its content index. The
+file is `<session dir>/refs/<conversation>-<seq>-<index>` and is written once, the first
+time the event is produced; a replay reuses it.
 
 ```json
-{"jsonrpc":"2.0","id":19,"result":{"bytes":182400,"ref":"/home/me/.pirs/sessions/home-me-proj/blob/7c1a.txt"}}
+{"jsonrpc":"2.0","method":"loop.message","params":{"loop":"k3x9a1","seq":12,"role":"toolResult","message":{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[{"type":"text","text":"[by reference]"}],"details":{"ref":{"ref":"/home/me/.pirs/sessions/--home-me-proj--/refs/0199-...-12-0","bytes":182400},"refs":[{"index":0,"ref":"/home/me/.pirs/sessions/--home-me-proj--/refs/0199-...-12-0","bytes":182400}]},"isError":false,"timestamp":1733234402000}}}
+{"jsonrpc":"2.0","id":19,"method":"fs.read","params":{"loop":"k3x9a1","path":"/home/me/.pirs/sessions/--home-me-proj--/refs/0199-...-12-0"}}
+{"jsonrpc":"2.0","id":19,"result":{"content":"…182400 bytes…"}}
 ```
+
+`fs.read` answers with `content` for any readable file up to 16 MB, a ref or not; above
+that cap it fails with `-32602`. The `{ ref, bytes }` result form remains in the schema as
+the shape of a by-reference payload.
 
 ## `seq` and replay
 

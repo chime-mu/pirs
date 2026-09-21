@@ -3,6 +3,7 @@ name = "pirs-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Wire types for the pirs protocol: JSON-RPC envelope, requests, events, handler slots, messages, and the JSON-line frame."
 
 [dependencies]

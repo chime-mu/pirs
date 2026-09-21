@@ -1,0 +1,58 @@
+# cargo-deny: the transitive half of the architecture.
+#
+# `crates/pirs/tests/architecture.rs` asserts the edges between workspace
+# members; this file asserts the edges to the crates that define a component's
+# job. A UI crate is a UI crate because it is the only thing that may reach a
+# terminal library, and a provider crate because it is the only thing that may
+# reach an HTTP client. Both rules are here, as bans with `wrappers`: the
+# banned crate may appear in the graph, but only underneath the crates named.
+#
+# `docs/design/20-architecture.md` ("Mechanical checks") is the authority.
+# `cargo deny check bans` is the gate, and the only one this file defines:
+# advisories, licenses and sources are deliberately not configured, so the
+# command checks bans and nothing else.
+
+[graph]
+all-features = true
+
+[bans]
+# A duplicate version is worth seeing, not worth failing a build over.
+multiple-versions = "warn"
+# A `*` version requirement pins nothing and is never intentional — but a
+# `{ path = "../x" }` dependency between workspace members is a wildcard too,
+# and `allow-wildcard-paths` excuses one only for a crate that says
+# `publish = false`. Every member says it as of phase 1, so this is "deny":
+# what it now catches is a real `foo = "*"` on an external crate, and a new
+# member whose manifest forgot the `publish = false` line.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[[bans.deny]]
+crate = "crossterm"
+# Phase 3 replaces "pi-cli" with "pirs-tui" here: the interactive mode moves
+# into `pirs-tui` and `pi-cli` is deleted at the end of that phase (D-04).
+# `ratatui-crossterm` is ratatui's own backend shim, not a second door: it is
+# reachable only from ratatui, which is banned to the same one crate.
+wrappers = ["pi-cli", "ratatui-crossterm"]
+reason = "terminal input and output belong to the one UI crate; nothing else may draw"
+
+[[bans.deny]]
+crate = "ratatui"
+# Phase 3 replaces "pi-cli" with "pirs-tui" here (D-04).
+wrappers = ["pi-cli"]
+reason = "widgets belong to the one UI crate; the client library and the server never render"
+
+[[bans.deny]]
+crate = "reqwest"
+# `pi-ext` is removed in phase 4, when extensions become DSL policy plus
+# processes; the wrapper entry goes with it and `pi-ai` is left alone.
+wrappers = ["pi-ai", "pi-ext"]
+reason = "HTTP is a provider concern; a client, the TUI or the server reaching the network directly is the bug this ban catches"
+
+[[bans.deny]]
+crate = "vt100"
+reason = "a terminal emulator makes pirs a pty server by accident; a pty server is a separate component (20-architecture.md, phase 8)"
+
+[[bans.deny]]
+crate = "alacritty_terminal"
+reason = "a terminal emulator makes pirs a pty server by accident; a pty server is a separate component (20-architecture.md, phase 8)"

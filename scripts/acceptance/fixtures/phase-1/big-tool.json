@@ -1,0 +1,4 @@
+[
+  { "text": "reading it now. ", "toolCalls": [{ "name": "big", "arguments": {} }] },
+  "that was a lot of x"
+]
