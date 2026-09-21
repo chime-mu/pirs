@@ -1938,37 +1938,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pi-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "clap",
- "crossterm",
- "dirs",
- "futures",
- "globset",
- "ignore",
- "pi-agent",
- "pi-ai",
- "pi-ext",
- "ratatui",
- "regex",
- "serde",
- "serde_json",
- "shell-words",
- "similar",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "unicode-width",
- "uuid",
-]
-
-[[package]]
 name = "pi-ext"
 version = "0.1.0"
 dependencies = [
@@ -2006,10 +1975,10 @@ dependencies = [
  "clap",
  "futures",
  "nix",
- "pi-cli",
  "pirs-client",
  "pirs-protocol",
  "pirs-server",
+ "pirs-tui",
  "serde_json",
  "tokio",
  "tracing",
@@ -2065,6 +2034,26 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "pirs-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "dirs",
+ "futures",
+ "pirs-client",
+ "pirs-protocol",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml",
+ "tracing",
+ "unicode-width",
 ]
 
 [[package]]
@@ -2764,12 +2753,6 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
-
-[[package]]
-name = "shell-words"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"

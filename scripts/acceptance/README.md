@@ -10,6 +10,16 @@ phase passes; every check prints one line.
 - `phase-1.sh` — the server and the print client (S1, S2): a scripted answer on stdout,
   two one-shots in one directory, `--continue`, a tool result by reference, `subscribe`
   with `since`, idle exit, and `pirs tui`.
+- `phase-2.sh` — policy without code (S3, S4, S5): `pirs check` with the assembled prompt
+  and a conflict naming both files, a rewritten input reaching the model, an `on turn_end`
+  hook, a rewritten tool result next to the original, a `[[command]]`, a policy the model
+  writes taking effect on the next turn, and a broken file as a warning.
+- `phase-3.sh` — the TUI as a client (S6, S10–S14): `pirs tui --headless WxH` drives the
+  real UI against the real server from a script of JSON lines on stdin
+  (`crates/pirs-tui/README.md`) and the checks assert on the screens it dumps — two agents
+  with their states, the attention flag appearing on idle and clearing when the page is
+  viewed, a scripted tool write refreshing an open file page, a `[[render]]` picker whose
+  choice becomes the next prompt, and the old interactive mode gone from `cargo metadata`.
 
 `lib/raw.py` is the raw wire client the scripts use for the steps the `pirs` command does
 not expose: it says `hello`, sends each request line from stdin, prints every line the

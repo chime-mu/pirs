@@ -1,4 +1,4 @@
-//! `pirs`: the command, the server, and the stopgap interactive mode.
+//! `pirs`: the command, the server, and the UI.
 //!
 //! One binary with four jobs, because a user should install one thing:
 //!
@@ -7,7 +7,7 @@
 //!   auto-starts;
 //! - `pirs stop`, `pirs --list` and `pirs check` — the small
 //!   administrative commands;
-//! - `pirs tui` — the old in-process interactive mode, a phase 1-3 stopgap.
+//! - `pirs tui` — the reference UI, a client of the server like any other.
 //!
 //! This file is argument parsing and dispatch; everything else is in
 //! [`print`] and [`commands`]. Diagnostics go to stderr; `PIRS_LOG` turns on
@@ -47,7 +47,16 @@ async fn dispatch(cli: Cli) -> i32 {
         Some(Command::Check) => {
             commands::check::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
         }
-        Some(Command::Tui { args }) => commands::tui::run(args).await,
+        Some(Command::Tui { headless, config }) => {
+            commands::tui::run(
+                headless,
+                config,
+                global.cwd.as_deref(),
+                global.socket.as_deref(),
+                global.no_start,
+            )
+            .await
+        }
         None if cli.run.list => {
             commands::list::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
         }

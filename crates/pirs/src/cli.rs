@@ -28,7 +28,7 @@ use pirs_protocol::ThinkingLevel;
     subcommand_negates_reqs = true
 )]
 pub(crate) struct Cli {
-    /// `serve`, `stop` or `tui`; absent means print mode.
+    /// `serve`, `stop`, `check` or `tui`; absent means print mode.
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 
@@ -119,17 +119,42 @@ pub(crate) enum Command {
     /// script can gate on it.
     Check,
 
-    /// The old in-process interactive mode: a phase 1-3 stopgap.
+    /// The terminal UI: a sidebar of agents, one page each, files and
+    /// widgets.
     ///
-    /// Every argument is passed to it unchanged, `--help` included; it does
-    /// not speak the protocol and does not use the loop server. Phase 3
-    /// replaces it with a client of the server.
-    #[command(disable_help_flag = true)]
+    /// A client like any other: it talks to the loop server over the socket
+    /// and starts one if none is listening. `--cwd` is the directory whose
+    /// conversations the sidebar lists.
     Tui {
-        /// Arguments for the old interactive mode (`pirs tui --help`).
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
-        args: Vec<String>,
+        /// Drive the UI from a script instead of a terminal, on a screen
+        /// this many columns by rows (`100x30`).
+        ///
+        /// The scriptable mode the acceptance tests use: stdin is a script
+        /// of JSON lines, one command per line, and stdout carries an echo
+        /// per command and the screens `{"dump":true}` asks for. The
+        /// commands are listed in `crates/pirs-tui/README.md`.
+        #[arg(long, value_name = "WxH", value_parser = parse_size)]
+        headless: Option<(u16, u16)>,
+
+        /// The UI's configuration file (default: `~/.pirs/tui.toml`).
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
+}
+
+/// `--headless <W>x<H>`, the size of the screen the script draws on.
+fn parse_size(value: &str) -> Result<(u16, u16), String> {
+    let (w, h) = value
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("{value:?} is not a size: write it as WxH, e.g. 100x30"))?;
+    let parse = |part: &str, what: &str| -> Result<u16, String> {
+        part.trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| format!("{value:?}: {what} {part:?} is not a positive number"))
+    };
+    Ok((parse(w, "the width")?, parse(h, "the height")?))
 }
 
 /// `--thinking <level>`, spelled as the protocol spells it.
@@ -274,15 +299,63 @@ mod tests {
     }
 
     #[test]
-    fn tui_passes_everything_through_including_help() {
-        match parse(&["pirs", "tui", "--help"]).command {
-            Some(Command::Tui { args }) => assert_eq!(args, ["--help"]),
+    fn tui_takes_a_headless_size_a_config_and_the_global_options() {
+        match parse(&["pirs", "tui"]).command {
+            Some(Command::Tui { headless, config }) => {
+                assert_eq!(headless, None);
+                assert_eq!(config, None);
+            }
             other => panic!("expected tui, got {other:?}"),
         }
-        match parse(&["pirs", "tui", "-p", "hi", "--model", "faux/scripted"]).command {
-            Some(Command::Tui { args }) => assert_eq!(args, ["-p", "hi", "--model", "faux/scripted"]),
+        let cli = parse(&[
+            "pirs",
+            "tui",
+            "--headless",
+            "100x30",
+            "--config",
+            "/tmp/tui.toml",
+            "--cwd",
+            "/tmp/p",
+            "--socket",
+            "/tmp/s.sock",
+            "--no-start",
+        ]);
+        match cli.command {
+            Some(Command::Tui { headless, config }) => {
+                assert_eq!(headless, Some((100, 30)));
+                assert_eq!(config, Some(PathBuf::from("/tmp/tui.toml")));
+            }
             other => panic!("expected tui, got {other:?}"),
         }
+        assert_eq!(cli.global.cwd, Some(PathBuf::from("/tmp/p")));
+        assert_eq!(cli.global.socket, Some(PathBuf::from("/tmp/s.sock")));
+        // `--no-start` reaches the UI as `TuiOptions::auto_start`.
+        assert!(cli.global.no_start);
+        assert!(!parse(&["pirs", "tui"]).global.no_start);
+    }
+
+    #[test]
+    fn the_old_interactive_modes_options_are_gone() {
+        // `pirs tui` is a client now: `pi-cli`'s flags are not accepted and
+        // its `--extension` is nowhere in the help (D-04).
+        assert!(Cli::try_parse_from(["pirs", "tui", "--extension", "x"]).is_err());
+        assert!(Cli::try_parse_from(["pirs", "tui", "-p", "hi"]).is_err());
+        let help = Cli::command()
+            .find_subcommand_mut("tui")
+            .expect("tui is a subcommand")
+            .render_long_help()
+            .to_string();
+        assert!(!help.contains("--extension"), "{help}");
+        assert!(help.contains("--headless"), "{help}");
+    }
+
+    #[test]
+    fn a_headless_size_is_two_positive_numbers() {
+        assert_eq!(parse_size("100x30").unwrap(), (100, 30));
+        assert_eq!(parse_size("80X24").unwrap(), (80, 24));
+        assert!(parse_size("100").unwrap_err().contains("WxH"));
+        assert!(parse_size("0x30").unwrap_err().contains("width"));
+        assert!(parse_size("100xtall").unwrap_err().contains("height"));
     }
 
     #[test]

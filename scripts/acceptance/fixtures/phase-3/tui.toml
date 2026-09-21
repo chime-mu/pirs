@@ -1,0 +1,9 @@
+# The UI configuration for the phase-3 acceptance run, installed as
+# `$PIRS_HOME/tui.toml`. `@FIXTURES@` is replaced with this directory by
+# phase-3.sh, because a `[[render]] run` is a command line and the fixtures
+# are not on `$PATH`.
+status = "{loop.state}"
+
+[[render]]
+tool = "ask"
+run = "@FIXTURES@/ask-render.sh"

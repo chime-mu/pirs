@@ -17,7 +17,10 @@
 #   5. A client that subscribes with `since: 0` after the run replays the
 #      sequenced events, `loop.turn_end` included, and no deltas.
 #   6. `pirs serve --idle 1` exits by itself once its last client is gone.
-#   7. `pirs tui` still runs the old in-process interactive mode.
+#   7. `pirs tui` is a client of the same server. (Phase 1 ran the old
+#      in-process interactive mode here; phase 3 replaced it with `pirs-tui`
+#      and deleted the crate the old mode lived in, so what is left to check
+#      is that the subcommand still works against this phase's server.)
 #
 # Usage: scripts/acceptance/phase-1.sh [--build]
 #
@@ -316,19 +319,19 @@ server_pid=""
 
 # ----------------------------------------------------- 7: the old TUI crate
 
-echo "-- check 7: pirs tui still runs the old interactive mode"
+echo "-- check 7: pirs tui is a client of the same server"
 new_world
-old="$("$bin" tui -p "hi" --model faux/scripted --no-session --cwd "$proj")" && code=0 || code=$?
-if [ "$code" = 0 ] && [ -n "$old" ] && [ "$old" != "${old#*hi}" ]; then
-  pass "pirs tui -p printed $(printf '%q' "$old") through the old code path"
+start_server ""
+# Headless, because there is no terminal here: the UI's own event loop on a
+# test backend, driven by a script of JSON lines (crates/pirs-tui/README.md).
+"$bin" tui --headless 60x12 --cwd "$proj" >"$tmp/tui.out" 2>"$tmp/tui.err" <<'SCRIPT' && code=0 || code=$?
+{"dump":true}
+{"quit":true}
+SCRIPT
+if [ "${code:-0}" = 0 ] && grep -q "agents" "$tmp/tui.out"; then
+  pass "pirs tui attached to this phase's server and drew its sidebar"
 else
-  fail "pirs tui -p printed $(printf '%q' "$old") and exited $code"
-fi
-
-if "$bin" tui --help 2>&1 | grep -q -- "--extension"; then
-  pass "pirs tui --help is pi-cli's own help (it lists --extension)"
-else
-  fail "pirs tui --help does not look like pi-cli's help"
+  fail "pirs tui exited ${code:-0}: $(cat "$tmp/tui.out" "$tmp/tui.err")"
 fi
 
 # --------------------------------------------------------------------------

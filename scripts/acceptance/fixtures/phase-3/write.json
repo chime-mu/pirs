@@ -1,0 +1,12 @@
+[
+  {
+    "text": "writing the note. ",
+    "toolCalls": [{ "name": "write", "arguments": { "path": "notes.txt", "content": "FIRST" } }]
+  },
+  "the note says FIRST",
+  {
+    "text": "changing the note. ",
+    "toolCalls": [{ "name": "write", "arguments": { "path": "notes.txt", "content": "SECOND" } }]
+  },
+  "the note says SECOND"
+]

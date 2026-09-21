@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "The pirs command: print mode, the loop server, and the phase 1-3 interactive stopgap."
+description = "The pirs command: print mode, the loop server, the small administrative commands and the UI."
 
 [[bin]]
 name = "pirs"
@@ -14,7 +14,7 @@ path = "src/main.rs"
 pirs-protocol = { path = "../pirs-protocol" }
 pirs-client = { path = "../pirs-client" }
 pirs-server = { path = "../pirs-server" }
-pi-cli = { path = "../pi-cli" }
+pirs-tui = { path = "../pirs-tui" }
 anyhow.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive"] }

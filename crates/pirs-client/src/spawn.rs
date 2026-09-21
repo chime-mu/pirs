@@ -6,6 +6,7 @@
 //! for the socket to appear. The server owns its own idle exit.
 
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::error::{ClientError, Result};
@@ -87,7 +88,25 @@ pub fn split_command(input: &str) -> Vec<String> {
 
 /// The command that starts a server: `explicit` if given, else
 /// `PIRS_SERVER_COMMAND` split into words, else this executable with `serve`.
-pub(crate) fn server_command(explicit: Option<Vec<String>>) -> Result<Vec<String>> {
+///
+/// `socket` is the socket the caller named itself (not the default): the
+/// started server must listen there, so `--socket <path>` is appended unless
+/// the command already says which socket it wants.
+pub(crate) fn server_command(
+    explicit: Option<Vec<String>>,
+    socket: Option<&Path>,
+) -> Result<Vec<String>> {
+    let mut command = command_words(explicit)?;
+    if let Some(socket) = socket {
+        if !command.iter().any(|w| w == "--socket") {
+            command.push("--socket".to_owned());
+            command.push(socket.to_string_lossy().into_owned());
+        }
+    }
+    Ok(command)
+}
+
+fn command_words(explicit: Option<Vec<String>>) -> Result<Vec<String>> {
     if let Some(command) = explicit {
         if command.is_empty() {
             return Err(ClientError::EmptyServerCommand);
@@ -158,11 +177,46 @@ mod tests {
     #[test]
     fn explicit_command_wins_and_must_not_be_empty() {
         let explicit = vec!["/bin/echo".to_owned(), "hi".to_owned()];
-        assert_eq!(server_command(Some(explicit.clone())).unwrap(), explicit);
+        assert_eq!(
+            server_command(Some(explicit.clone()), None).unwrap(),
+            explicit
+        );
         assert!(matches!(
-            server_command(Some(Vec::new())),
+            server_command(Some(Vec::new()), None),
             Err(ClientError::EmptyServerCommand)
         ));
+    }
+
+    #[test]
+    fn an_explicit_socket_is_passed_to_the_started_server() {
+        // A `--socket` only the client knew about would otherwise start a
+        // server on the default socket, where this client never looks.
+        let socket = Path::new("/tmp/other.sock");
+        let started = server_command(
+            Some(vec!["/opt/pirs".to_owned(), "serve".to_owned()]),
+            Some(socket),
+        )
+        .unwrap();
+        assert_eq!(
+            started,
+            ["/opt/pirs", "serve", "--socket", "/tmp/other.sock"]
+        );
+        // The default socket adds nothing, and a command that already names
+        // a socket is left alone.
+        assert_eq!(
+            server_command(Some(vec!["/opt/pirs".to_owned(), "serve".to_owned()]), None).unwrap(),
+            ["/opt/pirs", "serve"]
+        );
+        let named = vec![
+            "/opt/pirs".to_owned(),
+            "serve".to_owned(),
+            "--socket".to_owned(),
+            "/tmp/mine.sock".to_owned(),
+        ];
+        assert_eq!(
+            server_command(Some(named.clone()), Some(socket)).unwrap(),
+            named
+        );
     }
 
     #[test]
@@ -170,11 +224,11 @@ mod tests {
         // This is the only test that touches `PIRS_SERVER_COMMAND`.
         std::env::set_var(SERVER_COMMAND_ENV, "'/opt/my pirs' serve --idle 5");
         assert_eq!(
-            server_command(None).unwrap(),
+            server_command(None, None).unwrap(),
             ["/opt/my pirs", "serve", "--idle", "5"]
         );
         std::env::set_var(SERVER_COMMAND_ENV, "   ");
-        let default = server_command(None).unwrap();
+        let default = server_command(None, None).unwrap();
         assert_eq!(default.len(), 2);
         assert_eq!(default[1], "serve");
         assert_eq!(
@@ -182,6 +236,6 @@ mod tests {
             std::env::current_exe().unwrap().to_string_lossy()
         );
         std::env::remove_var(SERVER_COMMAND_ENV);
-        assert_eq!(server_command(None).unwrap(), default);
+        assert_eq!(server_command(None, None).unwrap(), default);
     }
 }

@@ -1,0 +1,7 @@
+[
+  {
+    "text": "looking into it. ",
+    "toolCalls": [{ "name": "bash", "arguments": { "command": "sleep 3" } }]
+  },
+  "that took a while"
+]

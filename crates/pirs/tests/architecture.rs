@@ -18,13 +18,13 @@
 //!
 //! **This file lived in `crates/pirs-protocol/tests/` in phase 0** and moved
 //! here in phase 1, now that `pirs` is the crate that depends on all the
-//! others. Phase 3 adds `pirs-tui` → `{pirs-protocol, pirs-client}` and, at
-//! its end, deletes the `pi-cli` row (D-04); phase 4 deletes the `pi-ext`
-//! row. Edit `EXPECTED` and nothing else.
+//! others. Phase 3 added `pirs-tui` → `{pirs-protocol, pirs-client}` and, at
+//! its end, deleted the row of the crate the interactive mode came out of
+//! (D-04); phase 4 deletes the `pi-ext` row. Edit `EXPECTED` and nothing
+//! else.
 //!
-//! `pi-cli` is the phase 1-3 stopgap: `pirs tui` runs the old in-process
-//! interactive mode by calling into it, which is why `pirs` depends on a
-//! crate the finished architecture does not have.
+//! `pi-ext` is the last row here that the finished architecture does not
+//! have: nothing depends on it any more and it goes in phase 4.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -37,11 +37,11 @@ const EXPECTED: &[(&str, &[&str])] = &[
     ("pi-ai", &[]),
     ("pi-agent", &["pi-ai"]),
     ("pi-ext", &["pi-ai", "pi-agent"]),
-    ("pi-cli", &["pi-ai", "pi-agent", "pi-ext"]),
     ("pirs-protocol", &[]),
     ("pirs-server", &["pi-ai", "pi-agent", "pirs-protocol"]),
     ("pirs-client", &["pirs-protocol"]),
-    ("pirs", &["pirs-protocol", "pirs-client", "pirs-server", "pi-cli"]),
+    ("pirs-tui", &["pirs-protocol", "pirs-client"]),
+    ("pirs", &["pirs-protocol", "pirs-client", "pirs-server", "pirs-tui"]),
 ];
 
 /// The workspace root: two levels up from `crates/pirs`.

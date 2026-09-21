@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pi-ai", "crates/pi-agent", "crates/pi-ext", "crates/pi-cli", "crates/pirs-protocol", "crates/pirs-server", "crates/pirs-client", "crates/pirs"]
+members = ["crates/pi-ai", "crates/pi-agent", "crates/pi-ext", "crates/pirs-protocol", "crates/pirs-server", "crates/pirs-client", "crates/pirs-tui", "crates/pirs"]
 
 [workspace.package]
 version = "0.1.0"

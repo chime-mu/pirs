@@ -185,7 +185,10 @@ impl Client {
                         source: error,
                     });
                 }
-                let command = spawn::server_command(options.server_command.clone())?;
+                let command = spawn::server_command(
+                    options.server_command.clone(),
+                    options.socket.as_deref(),
+                )?;
                 spawn::spawn_detached(&command)?;
                 wait_for_socket(&socket, options.start_timeout).await?
             }

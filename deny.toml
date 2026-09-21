@@ -29,17 +29,17 @@ allow-wildcard-paths = true
 
 [[bans.deny]]
 crate = "crossterm"
-# Phase 3 replaces "pi-cli" with "pirs-tui" here: the interactive mode moves
-# into `pirs-tui` and `pi-cli` is deleted at the end of that phase (D-04).
+# One door: the interactive mode moved into `pirs-tui` in phase 3 and the
+# crate it came from was deleted with it (D-04).
 # `ratatui-crossterm` is ratatui's own backend shim, not a second door: it is
 # reachable only from ratatui, which is banned to the same one crate.
-wrappers = ["pi-cli", "ratatui-crossterm"]
+wrappers = ["pirs-tui", "ratatui-crossterm"]
 reason = "terminal input and output belong to the one UI crate; nothing else may draw"
 
 [[bans.deny]]
 crate = "ratatui"
-# Phase 3 replaces "pi-cli" with "pirs-tui" here (D-04).
-wrappers = ["pi-cli"]
+# One door, since phase 3 (D-04).
+wrappers = ["pirs-tui"]
 reason = "widgets belong to the one UI crate; the client library and the server never render"
 
 [[bans.deny]]

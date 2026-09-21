@@ -1,0 +1,13 @@
+[
+  {
+    "text": "one question first. ",
+    "toolCalls": [
+      {
+        "name": "ask",
+        "arguments": { "question": "Which one?", "options": ["alpha", "beta"] }
+      }
+    ]
+  },
+  "waiting for your answer",
+  "you chose it"
+]
