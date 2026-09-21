@@ -1,22 +1,36 @@
-> Reference copy of pi's `docs/session-format.md` (MIT). pirs writes the same JSONL v3 format.
-
 # Session File Format
 
-Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with a `type` field. Session entries form a tree structure via `id`/`parentId` fields, enabling in-place branching without creating new files.
+A pirs conversation is one JSONL (JSON Lines) file. Each line is a JSON object with a
+`type` field. Entries form a tree through `id`/`parentId`, so a conversation can branch in
+place without a second file.
+
+The format is version 3 of pi's session format (MIT), with one addition of pirs's own: a
+per-entry `seq`. Everything below describes what pirs writes; pi can still read the message
+entries, and pirs reads a file pi wrote. Where a paragraph is about pi's own CLI or
+TypeScript API rather than pirs, it says so.
 
 ## File Location
 
 ```
-~/.pi/agent/sessions/--<path>--/<timestamp>_<session-id>.jsonl
+~/.pirs/sessions/<encoded cwd>/<timestamp>_<conversation-id>.jsonl
 ```
 
-By default, `<session-id>` is a UUID. Callers can supply a custom ID through the SDK or `--session-id`. For `<path>`, Pi removes the leading path separator and replaces `/`, `\\`, and `:` with `-`.
+`PIRS_HOME` moves the whole `~/.pirs` directory, which is how the tests redirect it.
+`<conversation-id>` is a time-ordered UUIDv7. `<timestamp>` is the header's ISO timestamp
+with `:` and `.` replaced by `-`, so a directory listing sorts by creation time:
+`2026-09-21T06-08-36-745Z_01a0c294-a589-7000-8005-cce0dba18dd6.jsonl`. For
+`<encoded cwd>`, the leading path separator is removed, `/`, `\` and `:` become `-`, and
+the result is wrapped in `--`: `/home/me/proj` is `--home-me-proj--`. That is pi's encoding
+unchanged, so the two tools agree on where a directory's conversations live.
+
+The server is the only writer. A client never opens a session file itself: a path in what
+the server sends is a label the client displays and hands back, and `fs.read` is how it
+reads one (`docs/protocol.md`, "Paths are opaque").
 
 ## Deleting Sessions
 
-Sessions can be removed by deleting their `.jsonl` files under `~/.pi/agent/sessions/`.
-
-Pi also supports deleting sessions interactively from `/resume` (select a session and press `Ctrl+D`, then confirm). When available, pi uses the `trash` CLI to avoid permanent deletion.
+Delete the `.jsonl` file, and the `refs/` files belonging to it (below). pirs has no
+command for this, and no equivalent of pi's interactive deletion from `/resume`.
 
 ## Session Version
 
@@ -28,9 +42,36 @@ Sessions have a version field in the header:
 
 Existing sessions are automatically migrated to the current version (v3) when loaded.
 
+## `seq`
+
+Every entry but the header carries a `seq`: an integer that starts at 1 and increases by
+one per entry appended to the file. It is assigned on append, and restored on open by
+reading the highest `seq` in the file, so the numbering survives a restart and continues
+where it left off. A file written by pi has no `seq` at all; those entries are numbered in
+file order when the file is read, and the next append continues from the highest number
+seen. `seq` is an index, not a count: the numbers of one loop's entries are unique and
+increasing, and a reader that skips entries will see gaps.
+
+## The log is the event stream
+
+The session log is not a transcript written beside the events — it *is* them (D-06). Every
+sequenced event a loop emits is one entry of its log, and the event's `seq` is that entry's
+`seq`. `subscribe { loop, since: n }` replays the logged events with `seq > n` before any
+live ones, so a client whose connection dropped catches up on exactly what it missed by
+reading the file back. Streaming deltas are the exception: they carry no `seq`, are never
+logged and are only ever sent live, so a replay gives the finished message instead of the
+fragments that built it.
+
+`crates/pirs-server/src/log.rs` is the conversion, in both directions, and
+`docs/protocol.md` has the wire form of each event.
+
 ## Source Files
 
-Source on GitHub ([pi](https://github.com/earendil-works/pi)):
+pirs's own implementation: `crates/pirs-server/src/session.rs` (the entry types, the tree,
+the file layout) and `crates/pirs-server/src/log.rs` (the log as the event stream).
+
+pi's source on GitHub ([pi](https://github.com/earendil-works/pi)), which is where the type
+definitions below come from:
 - [`packages/coding-agent/src/core/session-manager.ts`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/session-manager.ts) - Session entry types and SessionManager
 - [`packages/coding-agent/src/core/messages.ts`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/messages.ts) - Extended message types (BashExecutionMessage, CustomMessage, etc.)
 - [`packages/ai/src/types.ts`](https://github.com/earendil-works/pi/blob/main/packages/ai/src/types.ts) - Base message types (UserMessage, AssistantMessage, ToolResultMessage)
@@ -40,7 +81,7 @@ For TypeScript definitions in your project, inspect `node_modules/@earendil-work
 
 ## Message Types
 
-Session entries contain `AgentMessage` objects. Understanding these types is essential for parsing sessions and writing extensions.
+Session entries contain `AgentMessage` objects. These are the types a program that parses a session file has to understand.
 
 ### Content Blocks
 
@@ -206,6 +247,7 @@ interface SessionEntryBase {
   id: string;           // Usually an 8-char hex ID; may fall back to a full UUID
   parentId: string | null;  // Parent entry ID (null for a root entry)
   timestamp: string;    // ISO timestamp
+  seq?: number;         // pirs: 1, 2, 3, … in append order (absent in files pi wrote)
 }
 ```
 
@@ -294,10 +336,56 @@ Optional fields:
 Extension state persistence. Does NOT participate in LLM context.
 
 ```json
-{"type":"custom","id":"h8i9j0k1","parentId":"g7h8i9j0","timestamp":"2024-12-03T14:20:00.000Z","customType":"my-extension","data":{"count":42}}
+{"type":"custom","id":"h8i9j0k1","parentId":"g7h8i9j0","timestamp":"2024-12-03T14:20:00.000Z","seq":17,"customType":"my-extension","data":{"count":42}}
 ```
 
-Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
+Use `customType` to identify your own entries on reload. (In pi, interactive mode can draw
+a custom entry with `pi.registerEntryRenderer(customType, renderer)`; pirs has no such
+hook — a client reads the entry as an event and draws what it likes.)
+
+### The `pirs.*` custom entries
+
+The loop server writes its own events as `custom` entries under the `pirs.` prefix. They
+are not sent to the model, and none of them is a message; each is an event, and its `seq`
+is the event's `seq`. The `data` shapes, from `crates/pirs-server/src/log.rs`:
+
+| `customType` | Event | `data` |
+|---|---|---|
+| `pirs.status` | `loop.status` | `{ state, since, detail? }` — `state` is `working` or `idle`; `since` is Unix ms; `detail` is free text such as `"created"` or `"closed"` |
+| `pirs.turn_end` | `loop.turn_end` | `{ messages: [seq, …] }` — the seqs of the turn's message entries, not copies of them |
+| `pirs.run_end` | `loop.run_end` | `{ messages: [seq, …] }` — the same for a whole run |
+| `pirs.ui.status` | `ui.status` | `{ key, text }` — one status-line key and its current value |
+| `pirs.ui.widget` | `ui.widget` | `{ key, lines }` — one widget and its lines |
+| `pirs.ui.notify` | `ui.notify` | `{ level, text }` — `level` is `info`, `warning` or `error` |
+| `pirs.fs.changed` | `fs.changed` | `{ path, by }` — an absolute path the loop's own `write` or `edit` tool wrote; `by` is `tool` or `turn`. There is no watcher: a file changed by anything else is not reported |
+| `pirs.tool_result_rewrite` | — | `{ toolCallId, tool, messageSeq, by, original }` — see below |
+
+`pirs.tool_result_rewrite` is the one with no event. A `[[tool_result]]` policy entry may
+rewrite what the model reads back from a tool; the message entry then holds the *rewritten*
+result, and this entry follows it holding the original, the handler that changed it (`by`),
+and the `seq` of the message it belongs to (`messageSeq`). Nothing reaches the model that
+is not in the log beside what it replaced (D-21).
+
+Entries with no event — `model_change`, `thinking_level_change`, `session_info`,
+`pirs.tool_result_rewrite` — still consume a `seq`, which is why a replay may skip numbers.
+
+### The `refs/` directory
+
+A tool result whose single text block, or whose base64 image data, is larger than 64 KB
+travels **by reference**: the log keeps it in full, because the model needs it, but the
+event replaces that block's `text` or `data` with `"[by reference]"` and adds the file to
+the message's `details`:
+
+```json
+{"ref": {"ref": "<session dir>/refs/<conversation>-<seq>-<block>", "bytes": 70000},
+ "refs": [{"index": 0, "ref": "…", "bytes": 70000}]}
+```
+
+The files live in `refs/` next to the `.jsonl` files, named
+`<conversation-id>-<seq>-<content index>`, and are written once, the first time the event
+is produced; a replay reuses them. `details.ref` is the first oversized block, the common
+case; `details.refs` lists every one, with `mimeType` for an image, which is written
+decoded so the file is the image itself. `fs.read` serves any of them in full.
 
 ### CustomMessageEntry
 
@@ -324,13 +412,13 @@ Set `label` to `undefined` to clear a label.
 
 ### SessionInfoEntry
 
-Session metadata (e.g., user-defined display name). Set via `/name`, `--name` / `-n`, or `pi.setSessionName()` in extensions.
+Session metadata: the user-defined display name. In pirs it is set by `pirs --name "…"`,
+or by `name` on `loop.create`, and `pirs --list`, `pirs --continue=<name>` and the TUI's
+sidebar use it. (pi sets it with `/name`, `--name` / `-n` or `pi.setSessionName()`.)
 
 ```json
-{"type":"session_info","id":"k1l2m3n4","parentId":"j0k1l2m3","timestamp":"2024-12-03T14:35:00.000Z","name":"Refactor auth module"}
+{"type":"session_info","id":"k1l2m3n4","parentId":"j0k1l2m3","timestamp":"2024-12-03T14:35:00.000Z","seq":31,"name":"Refactor auth module"}
 ```
-
-The session name is displayed in the session selector (`/resume`) instead of the first message when set.
 
 ## Tree Structure
 
@@ -394,6 +482,8 @@ for (const line of lines) {
       console.log(`[${entry.id}] Branch from ${entry.fromId}`);
       break;
     case "custom":
+      // customType starting with "pirs." is one of the loop server's own
+      // events (see "The `pirs.*` custom entries").
       console.log(`[${entry.id}] Custom (${entry.customType}): ${JSON.stringify(entry.data)}`);
       break;
     case "custom_message":
@@ -412,9 +502,12 @@ for (const line of lines) {
 }
 ```
 
-## SessionManager API
+## SessionManager API (pi's)
 
-Key methods for working with sessions programmatically.
+pi's TypeScript API over these files, kept here as the reference for what the format
+supports. pirs's `SessionManager` in `crates/pirs-server/src/session.rs` mirrors it in Rust
+— same entry types, same tree, same context building, plus `seq` — and is internal to the
+server: a pirs client reaches a conversation through the protocol, not through an API.
 
 ### Static Creation Methods
 - `SessionManager.create(cwd, sessionDir?, options?)` - New session; `options` can set `id` and `parentSession`

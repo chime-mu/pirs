@@ -1,173 +1,105 @@
 # pirs status
 
-Last updated: 2026-09-20.
+2026-09-21. Branch `adaptable`: phases 0–7 of [`docs/design/PLAN.md`](docs/design/PLAN.md),
+one commit each.
 
-pirs is a Rust port of [pi](https://github.com/earendil-works/pi). The goal of the first
-milestone was a working coding agent with pi's architecture and, above all, proof that pi's
-TypeScript extension model can run from a Rust host. Both are done.
+pirs is now a loop server behind a unix socket that owns every agent, and a set of clients
+at the same door: the `pirs` command in print mode (`pirs "prompt"`, `--continue`,
+`--list`, `wait`), the terminal UI (`pirs tui`), and anything else that speaks
+[`docs/protocol.md`](docs/protocol.md). Behaviour is changed by `*.pirs.toml` policy files
+in `~/.pirs/ext/` and `<project>/.pirs/ext/` — eight slots plus a `[settings]` table,
+readable with `pirs check` — and by programs those files name: a `[[tool]] run = <path>`
+executable in any language, a process started by `[[on]] event = "start"` that connects back
+and registers as a handler, or a `[[tool]] loop = { … }` that runs a child agent and returns
+its answer. Servers reach across machines and containers through `pirs proxy` and
+`~/.pirs/servers.toml` (ssh, `docker exec`), with reconnect and replay from the last `seq`.
+`pirs ext new "<sentence>"` writes a policy file from a sentence and keeps it as the file's
+`intent`. pi's TypeScript extension compatibility is gone, with `pi-cli` and `pi-ext`:
+a customisation is a declaration or a separate program (D-22 in
+[`docs/design/90-decisions.md`](docs/design/90-decisions.md)). The session *format* stays
+pi-readable; the session *directory* does not.
 
-## Verification state
+## Phases
 
-- `cargo test --workspace`: 89 tests pass (pi-ai 11, pi-agent 2, pi-cli 71, pi-ext 5).
-- Extension compatibility sweep (`cargo run -p pi-ext --example sweep -- <pi>/packages/coding-agent/examples/extensions`):
-  71 of 77 pi example extensions load unchanged. The other 6 need npm packages not installed
-  in the checkout (`@anthropic-ai/sdk`, `ms`, `@earendil-works/gondolin`,
-  `@anthropic-ai/sandbox-runtime`) or Node streams (`fs.createReadStream`, `node:zlib`).
-- End-to-end runs (faux provider, print mode, JSON mode, session continue, interactive TUI
-  driven through tmux) exercised `hello.ts`, `permission-gate.ts`, `protected-paths.ts`,
-  `dynamic-tools.ts`, `todo.ts` against the real agent loop and persisted the results.
-- Live Anthropic requests verified on 2026-09-18 through the Claude Code keychain login
-  (`pirs -p --model anthropic/claude-sonnet-4-5 "say hi in five words"` answered). A stale
-  `~/.claude/.credentials.json` is skipped in favour of the keychain entry.
-- Handoff notes for the next session are in `HANDOFF.md`.
-- Not verified: live OpenAI requests (no key on the development machine); covered only by
-  request-shape unit tests. The faux provider (`--model faux/scripted`,
-  `PIRS_FAUX_SCRIPT=<json>`) stands in for real models in tests.
+| Phase | Title | Commit | Scenarios | Acceptance | Passed |
+|---|---|---|---|---|---|
+| 0 | Design freeze in code | `f424c04` | — | `phase-0.sh` | 113 tests, 4 checks |
+| 1 | Server and print client | `2f7f5e2` | S1, S2 | `phase-1.sh` | 254 tests, 14 checks |
+| 2 | Policy without code | `5c08088` | S3, S4, S5 (declarations, shell) | `phase-2.sh` | 346 tests, 16 checks |
+| 3 | TUI as a client | `b243abb` | S6, S11, S12, S13, S14 | `phase-3.sh` | 303 tests, 10 checks |
+| 4 | Executables | `2583315` | S5 (processes), S7, S8, S9 | `phase-4.sh` | 312 tests, 21 checks |
+| 5 | Several agents | `cec282d` | S16, S17 | `phase-5.sh` | 324 tests, 12 checks |
+| 6 | Remote and contained servers | `dfec48b` | S18, S19, S20, S21 | `phase-6.sh` | 354 tests, 13 checks |
+| 7 | Intent tooling | 9b0c92d | S10 | `phase-7.sh` | 380 tests, 27 checks |
 
-## Implemented
+Test counts are the whole workspace at that phase. Phase 3 is lower than phase 2 because
+`pi-cli` and its 71 tests were deleted with the old interactive mode (D-04).
 
-### pi-ai
-- Message, content, usage, cost, model, tool types with pi's exact JSON shapes (session files interoperate).
-- Anthropic Messages streaming: system prompt with cache control, tool use/results, thinking
-  (budget based), redacted thinking, usage and cost, stop reason mapping, abort.
-- OpenAI Chat Completions streaming (also for OpenAI-compatible servers): developer/system role,
-  tool calls, `reasoning_content`, `reasoning_effort`, usage with cached tokens, abort.
-- SSE parser, truncated-JSON salvage for tool arguments.
-- Model registry with a built-in catalog, `models.json` providers (`$ENV` and `!command` keys),
-  `registerProvider` from extensions, credential resolution from env vars.
-- Anthropic OAuth: pi's `auth.json` and the Claude Code login (`~/.claude/.credentials.json` or
-  the macOS keychain) are used when no API key is set; expired file-based tokens are refreshed
-  and written back; requests use pi's Claude Code conventions (Bearer auth, beta flags, identity
-  system block, tool-name casing). Verified live against the Anthropic API.
-- Faux scripted provider.
+Now: `cargo test --workspace` is **380 tests, 0 failures**, and all eight acceptance
+scripts pass on this tree (117 checks in total).
 
-### pi-agent
-- `AgentTool` trait, `ToolResult`, `AgentMessage` union (system, user, assistant, toolResult,
-  custom, bashExecution, branchSummary, compactionSummary).
-- Agent loop ported from `agent-loop.ts`: sequential and parallel tool execution, argument
-  validation, `beforeToolCall`/`afterToolCall` hooks, truncated-output failure handling,
-  early termination, steering and follow-up queues, event protocol
-  (`agent_start`, `turn_start`, `message_*`, `tool_execution_*`, `turn_end`, `agent_end`).
-- `Agent` wrapper with shared state, listeners, abort, wait-for-idle.
+Scenario titles, from [`docs/design/10-functionality.md`](docs/design/10-functionality.md):
 
-### pi-ext (extension host)
-- Dedicated thread with an rquickjs `AsyncRuntime`; requests are spawned onto the JS scheduler so
-  extension calls interleave (a command awaiting `waitForIdle` does not block `tool_call` dispatch).
-- TypeScript stripping via `swc_ts_fast_strip`, with full transform fallback.
-- Module resolver: relative imports, `index.ts` directories, `package.json` `pi.extensions`,
-  ESM packages in `node_modules`, and embedded virtual modules for `typebox`,
-  `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-agent-core`,
-  `@earendil-works/pi-tui`, and `node:fs`, `fs/promises`, `path`, `os`, `child_process`, `util`,
-  `url`, `crypto`, `process`, `events`, `readline`, `module` (plus the `@mariozechner/*` aliases).
-- `pi` ExtensionAPI: `on`, `registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`,
-  `getFlag`, `registerMessageRenderer`, `registerEntryRenderer`, `registerMarkdownTransformer`,
-  `sendMessage`, `sendUserMessage`, `appendEntry`, `setSessionName`, `getSessionName`, `setLabel`,
-  `exec`, `getActiveTools`, `getAllTools`, `setActiveTools`, `getCommands`, `setModel`,
-  `getThinkingLevel`, `setThinkingLevel`, `registerProvider`, `unregisterProvider`, `events`.
-- `ctx`: `ui` (select, confirm, input, editor, notify, setStatus, setWidget, setTitle,
-  setWorkingMessage, setEditorText, getEditorText, theme), `sessionManager`, `modelRegistry`
-  (find, getAvailable, complete), `model`, `thinkingLevel`, `signal`, `isIdle`, `abort`,
-  `hasPendingMessages`, `shutdown`, `getContextUsage`, `getSystemPrompt`; command context adds
-  `waitForIdle` and `getSystemPromptOptions`.
-- Event dispatch with pi's semantics: `tool_call` first block wins and input mutation,
-  `tool_result` patch chaining, `input` transform/handled chaining, `message_end` replacement,
-  `before_agent_start` message injection and system prompt chaining, `context` replacement,
-  `before_provider_request` payload replacement, `before_provider_headers`, `after_provider_response`,
-  `session_before_*` cancel, `project_trust`, `resources_discover` aggregation, `user_bash`.
-- Node-like globals: `console`, timers, `AbortController`, `fetch` (via reqwest), `process`
-  (live `env`, `cwd`, `platform`), `crypto.randomUUID`, `TextEncoder/Decoder`, `btoa/atob`,
-  `structuredClone`.
-- Errors in handlers are reported to the host, never fatal; cancellation reaches handlers as an
-  `AbortSignal`.
-- Extension-declared `renderCall`/`renderResult`/message renderers are invoked; their plain-text
-  output is displayed.
+| | | | |
+|---|---|---|---|
+| S1 Ask and get an answer | S2 Several agents in one directory | S3 Customise without code | S4 Check before running |
+| S5 Ask the agent to extend pirs | S6 Customise the UI | S7 Give the model a tool in any language | S8 Replace or wrap a built-in |
+| S9 A long-lived extension | S10 Write the policy from a sentence | S11 A sidebar of agents | S12 Needs attention is a fact |
+| S13 Read what the agent is editing | S14 Edit with my own editor | S15 Arrange the UI my way | S16 An agent that asks another agent |
+| S17 Wait for an agent from a script | S18 Agents on another machine | S19 A dropped link | S20 Run the agent in a jail |
+| S21 Mixed machines | | | |
 
-### pi-cli (`pirs`)
-- Built-in tools `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` with pi's names,
-  descriptions, schemas, prompt snippets and guidelines, truncation limits (2000 lines / 50 KB),
-  output formats, and `details` shapes. Bash runs in a process group, streams partial output,
-  honours timeout and abort, spills full output to a temp file when truncated. Grep/find are
-  in-process (`ignore` + `regex` + `globset`) and respect `.gitignore`.
-- Session manager: pi's JSONL v3 format and file layout, lazy file creation, tree entries
-  (`message`, `model_change`, `thinking_level_change`, `compaction`, `custom`, `custom_message`,
-  `label`, `session_info`, `branch_summary`), branching, fork, listing, v1/v2 migration,
-  unknown entries preserved.
-- Settings from `~/.pi/agent/settings.json` and `.pi/settings.json`; `models.json` from both.
-- Extension discovery from `~/.pi/agent/extensions`, `.pi/extensions`, settings `extensions`,
-  and `-e` flags.
-- System prompt builder ported from `system-prompt.ts` (preamble, tools, rules, docs, addendum,
-  project context, cwd, custom sections); AGENTS.md / CLAUDE.md discovery from root to cwd plus
-  the global file. The `docs` section points the model at `README.md`, `docs/`, `examples/`
-  and `STATUS.md` (resolved from `PIRS_DOCS_DIR`, the source tree, or `~/.pi/agent/pirs`) so
-  it can write extensions for itself; verified by having pirs build and test one.
-- Documentation: `docs/extensions.md` (pirs API as implemented), pi's extension and session
-  format references, and `examples/extensions/` with seven working pi examples.
-- `AgentSession`: input handling (extension commands, `!`/`!!` shell, `input` event,
-  `before_agent_start`), persistence of every message, extension dispatch of every lifecycle
-  event, tool-call interception, provider header/payload/response hooks, model and thinking
-  switching, `sendMessage` delivery modes (steer, followUp, nextTurn, triggerTurn), shutdown.
-- Modes: print (`-p`, final text), JSON (`--mode json`, event stream), interactive TUI
-  (inline viewport with streaming tail, extension widgets and status entries, dialogs for
-  extension `select`/`confirm`/`input` with timeouts, history, steering while running,
-  `/help /model /thinking /tools /extensions /session /new /reload /clear /exit`).
-- Live extension reload (`/reload`, `ctx.reload()`): `session_shutdown(reload)` to the old
-  runtime, then the QuickJS host thread is replaced by a fresh one (so changed modules and
-  transitive imports are re-evaluated and stale timers die), extension sources are
-  re-discovered (new/removed files picked up), context files re-read, tools and commands
-  re-registered, then `session_start(reload)` and `resources_discover(reload)`. Refused while
-  the agent is running. `ctx.reload()` hands the work to the main runtime because it is called
-  from the very thread being torn down.
-- CLI flags: `-p`, `--mode`, `-m/--model`, `--thinking`, `-e`, `--no-extensions`, `-c`,
-  `-r`, `--no-session`, `--session-dir`, `--system-prompt`, `--append-system-prompt`, `--tools`,
-  `--sequential-tools`, `--cwd`, `--list-models`, `--list-extensions`.
+`PLAN.md`'s **Enables** line for phase 3 and the header of `phase-3.sh` both read
+"S6, S10–S14"; S10 is phase 7's scenario in `10-functionality.md` and in `phase-7.sh`, so
+the table above reads that range as S11–S14. S15 is client-side config only and needs no
+server work.
 
-## Not implemented
+## Verified
 
-### Extension surface (by design of this port)
-- Custom TUI components: `ctx.ui.custom()`, custom editors, footers, headers, overlays,
-  autocomplete providers, themes, `onTerminalInput`. Theme colour functions return plain text.
-- CommonJS npm packages (`require`, `module.exports`), Node streams, `node:zlib`, `spawn`.
-- Custom `streamSimple` provider implementations from extensions (declarative providers work).
-- `ctx.newSession`, `ctx.fork`, `ctx.navigateTree`, `ctx.switchSession`
-  return `{ cancelled: true }`.
-- `ctx.modelRegistry.streamSimple` returns the completed message only (no token stream).
-- `pi.registerShortcut` handlers are stored but the TUI does not yet bind keys to them.
-- Flag values from the command line (`--<flag>`) are not parsed; `getFlag` returns defaults.
-- `ctx.isProjectTrusted()` always returns true; there is no project trust prompt.
+```bash
+cargo build --release
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check bans                        # from phase 1; needs `cargo install cargo-deny`
+scripts/acceptance/phase-0.sh                # … through phase-7.sh
+```
 
-### Agent and CLI features
-- Compaction (manual and automatic) and context-overflow recovery.
-- `/tree`, `/fork`, `/resume` navigation in the TUI (the session manager supports branching and
-  forking, the UI does not expose it).
-- Skills, prompt templates, `/skill:` and template expansion.
-- RPC mode, package installation (`pi install`, `packages` setting), interactive OAuth login
-  flows (`/login`; existing pi or Claude Code logins are reused), update checks.
-- Image attachments from the editor and image resizing (the `read` tool does return images).
-- Markdown rendering in the TUI (plain wrapped text), tool output expansion, multi-line editor
-  features beyond alt+enter, autocomplete.
-- Google, Bedrock, Mistral, OpenAI Responses and other pi provider APIs; only
-  `anthropic-messages` and `openai-completions` exist.
-- Model catalog costs for Claude 5 models are best-effort placeholders; override them in
-  `models.json` if exact accounting matters.
-- Windows support (the bash tool and paths assume a Unix shell).
+All of it runs with no network and no credentials: model calls in the scripts and in the
+tests use the faux provider (`--model faux/scripted`, `PIRS_FAUX_SCRIPT=<json>`) on a
+temporary socket, home and project directory. `scripts/acceptance/README.md` says what each
+script checks.
 
-## Known issues and notes
-- The TUI must never query the terminal cursor position while crossterm's `EventStream` is
-  alive: the query blocks for two seconds. `TrackedBackend` in `modes/interactive.rs` exists for
-  this; keep using it.
-- `PIRS_TRACE=1` prints timestamped dispatch traces to stderr for debugging latency.
-- `cargo clippy` reports a handful of style warnings (large enum variants, collapsible matches);
-  none affect behaviour.
-- A reference checkout of pi is expected at the path hard-coded in the pi-ext tests and the
-  `sweep` example; those tests skip when it is absent.
+Live Anthropic requests were last verified on **2026-09-18**, before this branch, through
+the Claude Code login. The provider code moved unchanged from `pi-cli` into `pirs-server`,
+but the new server has **not** been exercised against a live provider on this branch: no
+live request of any provider has gone through `pirs-server`.
 
-## Suggested next steps
-A redesign is under discussion in `docs/design/` (start at `00-north-star.md`) (loop server + protocol + DSL,
-components behind protocols); if adopted, its phase 0 supersedes this list. See `HANDOFF.md`.
+## Not built
 
-1. Live-test the OpenAI provider with a real key; try thinking levels and tool-heavy sessions
-   against Anthropic.
-2. Compaction, then `/tree` and `/fork` in the TUI.
-3. Shortcut key binding and CLI flag parsing for extensions.
-4. Markdown rendering and tool output expansion in the TUI.
-5. Skills and prompt templates.
+- **S22 · A terminal page.** No pty server, no terminal pages. Phase 8, not run.
+- **S23 · A web UI.** Not planned; the protocol is meant to carry it unchanged.
+- **Windows servers.** Linux and macOS servers only (D-31); the `run` shell and the local
+  transport are undecided. Windows clients are in the promise, untested here.
+- **Remote policy sync (D-26).** Policy files must already be on the machine the server
+  runs on; copying them from the client is not implemented.
+- **The Docker path is documented, not run.** `phase-6.sh` asserts that the `Dockerfile`
+  runs `pirs serve` and that `docs/containment.md` documents the `docker exec -i` bridge;
+  it never builds or starts the container.
+- **Stored conversations on a remote server.** `loop.list { cwd }` sends this machine's
+  directory as written (D-31), so a remote server usually has nothing under that path and
+  returns an empty conversation list; its *running* agents are still listed
+  (`crates/pirs-tui/README.md`).
+- **Editing without tmux.** `ctrl-e` needs `$TMUX`; outside tmux the UI says so and does
+  nothing (D-27, and S22 is the answer).
+
+## Crates
+
+| Crate | What |
+|---|---|
+| `pi-ai` | Providers and models: Anthropic and OpenAI streaming, OAuth and API-key credentials, the model registry and `models.json`, the faux scripted provider. |
+| `pi-agent` | The agent loop itself: the `AgentTool` trait, the message union, tool execution and hooks, the event protocol. |
+| `pirs-protocol` | Every wire type, the JSON-line `Frame`, `PROTOCOL_VERSION`, and the schema snapshot test against `docs/protocol.schema.json`. `serde` and `schemars` only. |
+| `pirs-server` | The loop server: the socket, loops and their sessions, built-in tools, the policy DSL and `dsl.check`, handler dispatch, the session log as event stream, `fs.read`/`fs.list`, idle exit. |
+| `pirs-client` | Connecting to one or many servers: auto-start, `hello`, requests by id, the subscribed event stream, reconnect with `since`. Protocol types only. |
+| `pirs-tui` | The reference UI: sidebar across servers, agent and file pages, widgets and status keys, `tui.toml`, `[[render]]` hooks, the tmux editor pane, and the `--headless` script mode the tests drive. |
+| `pirs` | The binary: `pirs "prompt"`, `serve`, `stop`, `proxy`, `check`, `wait`, `ext new`/`ext regen`, `tui`. |

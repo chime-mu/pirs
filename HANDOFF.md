@@ -1,129 +1,168 @@
 # Handoff
 
-Updated 2026-09-21. Read this first, then `docs/design/PLAN.md` if you are executing the design and
-`docs/design/README.md` if you are discussing it, `STATUS.md` for the feature inventory, and `docs/extensions.md` for
-the current (pi-compatible) extension API.
+Written 2026-09-21 at the end of the `docs/design/PLAN.md` run. Read this first, then
+`STATUS.md` for the phase table, `README.md` for the user's view, `docs/index.md` for the
+docs map, and `docs/design/README.md` if you are discussing the design.
 
-## Design: settled, ready to execute (2026-09-21)
+## What happened
 
-The design lives in `docs/design/`, split into layers; start at `docs/design/README.md`.
-Every argument is in `docs/design/90-decisions.md` (37 entries: 34 accepted, 3 superseded,
-none proposed). The layer files state without arguing; do not re-argue a settled entry
-without new evidence, and record any change as a new entry first.
+The plan was executed end to end on branch `adaptable` (from `main` at 87fb1ce), one commit
+per phase after a Fable review and fixups. Nothing is pushed. The old pi port is gone:
+`pi-cli` (phase 3) and `pi-ext` (phase 4) are deleted, `examples/extensions/` and the pi
+extension docs with them. The workspace is `pi-ai`, `pi-agent`, `pirs-protocol`,
+`pirs-server`, `pirs-client`, `pirs-tui`, `pirs`.
 
-**`docs/design/PLAN.md` is the execution plan.** A fresh Fable session runs it end to end:
-phases 0–7, Opus subagents for implementation, Fable subagents for the advanced pieces and
-for a review before each phase commit, on branch `adaptable`, one commit per phase, an
-acceptance script per phase under `scripts/acceptance/`. Read the plan's "Authority" and
-"Division of labour" sections before starting anything. When the run is done, this file is
-rewritten as the plan's last section says.
+| Phase | Commit | Tests | Acceptance |
+|---|---|---|---|
+| 0 Design freeze in code | f424c04 | 113 | `phase-0.sh` |
+| 1 Server and print client | 2f7f5e2 | 254 | `phase-1.sh` (14 checks) |
+| 2 Policy without code | 5c08088 | 346 | `phase-2.sh` (16 checks) |
+| 3 TUI as a client | b243abb | 303 | `phase-3.sh` (10 checks) |
+| 4 Executables | 2583315 | 312 | `phase-4.sh` (21 checks) |
+| 5 Several agents | cec282d | 324 | `phase-5.sh` (12 checks) |
+| 6 Remote and contained servers | dfec48b | 354 | `phase-6.sh` (13 checks) |
+| 7 Intent tooling | 9b0c92d | 380 | `phase-7.sh` (27 checks) |
+| Final tidy | the last commit on the branch | 380 | all eight from a clean checkout |
 
-Points most likely to be misread by someone arriving cold:
+Phase 3's total is lower than phase 2's because `pi-cli`'s 71 tests left with it.
 
-- **No checks inside the loop, and no dialogs.** Only the model asks the user anything, in
-  text; status is `working` or `idle`; structured questions are an `ask` tool plus a UI
-  render hook (D-19, D-37).
-- **One vocabulary, two bindings.** Every DSL `run` is a called process; long-lived
-  extensions are connected clients started from `on start` (D-16, D-23).
-- **The loop server never renders, never listens on the network, never interprets a path.**
-  Bridges (`pirs proxy`, a future web bridge) are separate and own their login (D-31, D-36).
-- **pi compatibility is gone**: `pi-ext` and `examples/extensions/` are deleted in phase 4;
-  the session *format* stays, the directory moves to `~/.pirs/`.
+## Decisions taken without the user
 
-The rendered design is a private page at https://claude.ai/artifact/9gZcPT15MuH5bCqbUSdneU;
-`docs/design/page.py` rebuilds it from the files.
+All are **proposed** entries at the end of `docs/design/90-decisions.md`, with the evidence.
+None of the layer files was edited for them (one exception below). Accept, reject, or
+supersede each; the code follows the entry as written.
 
-## Toolchain
+- **D-38** `loop.list { cwd? }` returns stored conversations. (phase 0)
+- **D-39** `fs.read` serves the requested path in full; by-reference payloads appear in
+  events and tool results. (phase 1)
+- **D-40** `dsl.check` returns `rendered`, the merged policy as text, so `pirs check` can
+  print it. (phase 2)
+- **D-41** `[settings]` has four keys: `model`, `thinking`, `tools`, `tool_execution`. (phase 2)
+- **D-42** A `[[tool]]` with `params` and neither `run` nor `loop` declares a tool served by
+  whichever client registered `tool.<name>`. (phase 4)
+- **D-43** An executable `[[prompt]] run` is a prompt handler over the assembled prompt,
+  the one exception to "prompts concatenate". (phase 4)
 
-This machine had no Rust toolchain; `rust@stable` (rustc 1.98.1) was installed globally with
-`mise use -g rust@stable` on 2026-09-19. `cargo` is at `~/.cargo/bin/cargo`; a fresh shell
-needs `mise` activated (or `~/.cargo/bin` on `PATH`). `cargo build --release` is clean.
+Design prose edited for an *accepted* entry: the "Editing" bullet in
+`docs/design/20-architecture.md` said the TUI suspends into `$EDITOR`; it now matches D-29
+(a tmux pane, never suspends). Two plan defaults were added to `PLAN.md`'s table for loop
+tools (no timeout unless written, `model` absent = the caller's model, an unresolvable model
+is an error result, nesting deeper than 8 is an error result).
 
-## Where things stand
+Implementation choices outside the tables, recorded here rather than as decisions:
+`on.<event>` slot requests are JSON-RPC notifications; `register.timeout` is milliseconds;
+`FsEntry.path` is a server-produced label (D-31); `--continue=<name-or-id>` uses an equals
+sign so a bare `--continue "prompt"` stays a prompt; the version-refusal acceptance uses a
+Python fake server instead of the plan's test feature flag; `pirs proxy` auto-starts the
+server on its side (the design says every client auto-starts a missing server, and over
+SSH the proxy is the client's stand-in there).
 
-- `pirs` is a working Rust port of pi: agent loop, seven built-in tools, pi-compatible sessions,
-  Anthropic and OpenAI streaming, print/JSON/interactive modes, and an embedded QuickJS host
-  that runs pi's TypeScript extensions unchanged (71 of pi's 77 examples load).
-- Live Anthropic requests work through the user's Claude Code login (keychain). The OpenAI
-  provider is unit-tested only.
-- The model can document itself: the system prompt has a `<docs>` section pointing at
-  `README.md`, `docs/`, `examples/`, and `STATUS.md`, and the user has already had pirs write
-  and test an extension (`secrets-protection.ts`, see below).
-- All 85 tests pass (`cargo test --workspace`). Last commit on `main`: see `git log`.
+## Acceptance scripts
 
-## Build and run
+`scripts/acceptance/phase-N.sh`, run from the repo root with `target/release/pirs` built.
+Each starts fresh servers on temporary sockets with a temporary `HOME`/`PIRS_HOME`,
+`XDG_RUNTIME_DIR` and project directory, drives the real binary with the faux provider
+(`--model faux/scripted`, `PIRS_FAUX_SCRIPT=<json>` in the **server's** environment, cursor
+per server process), prints one `PASS`/`FAIL` line per check and `phase-N: OK`, and needs no
+network or credentials. `scripts/acceptance/lib/raw.py` is a raw protocol client for
+scripts; `scripts/acceptance/README.md` lists every script.
 
 ```bash
 cargo build --release
-./target/release/pirs                      # interactive, uses Claude Code login if no key set
-./target/release/pirs -p "prompt"          # print mode
-./target/release/pirs --list-models        # shows which credential source is active
-./target/release/pirs --list-extensions -e examples/extensions/todo.ts
-PIRS_FAUX_SCRIPT=script.json ./target/release/pirs -p --model faux/scripted "x"   # offline
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check bans
+for n in 0 1 2 3 4 5 6 7; do scripts/acceptance/phase-$n.sh; done
 ```
 
-## Untracked files in the working tree
+## Where things live
 
-These were produced by the user's own pirs session (the agent building an extension for
-itself) and are intentionally not committed. Decide whether to keep, move, or delete them:
+- `~/.pirs/` (`PIRS_HOME` overrides): `pirs.sock` (or `$XDG_RUNTIME_DIR/pirs.sock`),
+  `pirs.sock.pid`, `sessions/<encoded cwd>/*.jsonl` (+ `refs/`), `ext/*.pirs.toml`,
+  `tui.toml`, `servers.toml`, `models.json`, `auth.json`. `settings.json` is no longer read.
+- `<project>/.pirs/ext/*.pirs.toml`: project policy. `pirs check` prints the merged result.
+- `docs/dsl.md` is the model-facing policy instruction set (also embedded in the binary for
+  `pirs ext new`); `docs/protocol.md` + `docs/protocol.schema.json` the wire;
+  `docs/session-format.md` the log; `docs/containment.md` the jailed setup;
+  `examples/policy/` six working examples; `crates/pirs-tui/README.md` the headless protocol.
 
-- `secrets-protection.ts`: an extension blocking writes under `secrets/` and confirming
-  `git push`. Working; a candidate for `examples/extensions/`.
-- `test-secrets-automated.ts`, `test-secrets-extension.sh`, `run-extension-tests.sh`,
-  `TEST_RESULTS.md`: its tests and results.
-- `secrets/`, `test-workspace/`, `fake-remote/`: scratch fixtures for those tests.
-- `PI_INSTALLATION.md`, `RIPGREP_FD_EXPLAINED.md`: notes written during that session
-  (the first suggests the original pi was installed on this machine for comparison).
+## Things that bite
 
-## Things that will bite the next person
-
-- **Reference pi checkout is gone.** During development pi was cloned into a temporary
-  scratch directory. `crates/pi-ext/src/lib.rs` (`examples_dir()`) and
-  `crates/pi-ext/examples/sweep.rs` refer to that path; the affected test skips when the
-  directory is missing. To restore: `git clone https://github.com/earendil-works/pi` somewhere
-  stable and point the path at `<pi>/packages/coding-agent/examples/extensions`, or make it an
-  env var (`PI_EXAMPLES_DIR`), which is the better fix.
 - **Never query the terminal cursor in the TUI** while crossterm's `EventStream` exists; it
-  blocks for two seconds and corrupts the inline viewport. `TrackedBackend` in
-  `crates/pi-cli/src/modes/interactive.rs` exists for this reason. ratatui is built with the
-  `scrolling-regions` feature for the same reason.
-- **Extension host concurrency**: one `ctx.async_with` block owns the QuickJS runtime and every
-  request is `ctx.spawn`ed onto rquickjs's scheduler (`crates/pi-ext/src/host.rs`,
-  `run_host`). Do not await host requests while holding the runtime lock elsewhere, and do not
-  add a second `async_with` block; it would serialize with the first and deadlock on dialogs.
-- **All JS-facing behaviour lives in `crates/pi-ext/src/js/runtime.js`** (the `pi` API, `ctx`,
-  dispatch semantics) and the shims in `crates/pi-ext/src/js/*.js`. Rust only provides the
-  `__hostSync`/`__hostAsync` natives and the `HostCallbacks` trait. Add new host functions in
-  `host_sync`/`host_async` in `host.rs` and call them from JS.
-- **OAuth**: `crates/pi-ai/src/oauth.rs`. Sources are tried in order (pi `auth.json`, Claude
-  Code file, keychain); expired file tokens are refreshed and written back; keychain tokens are
-  never refreshed (Claude Code owns them). A stale `~/.claude/.credentials.json` from June exists
-  on this machine and is skipped.
-- **Session files** go to `~/.pi/agent/sessions/<encoded cwd>/`, the same place pi uses; pirs
-  and pi can open each other's files. `--no-session` for throwaway runs.
-- `PIRS_TRACE=1` prints dispatch timings to stderr; useful for latency questions.
+  blocks two seconds and corrupts the screen. `crates/pirs-tui/src/terminal.rs` carries the
+  rule and a `TrackedBackend`; ratatui has `scrolling-regions`.
+- **OAuth**: `crates/pi-ai/src/oauth.rs`. Sources in order: pirs `auth.json`, Claude Code's
+  credentials file, the keychain; expired file tokens are refreshed and written back;
+  keychain tokens are never refreshed. A stale `~/.claude/.credentials.json` on this machine
+  is skipped. Live Anthropic requests were last verified on 2026-09-18, before this branch;
+  the provider code moved unchanged but the new server has not been run against a live
+  provider. Do that first.
+- **`PIRS_LOG=debug`** turns on `tracing` to stderr (the old `PIRS_TRACE` is gone).
+- **The faux script cursor is per server process.** A scenario that needs a particular
+  reply order starts its own server; parent and child loops in one server consume one
+  ordered script.
+- **Only `write`/`edit` tool results trigger the automatic policy reload** (D-33); a `bash`
+  redirect into `.pirs/ext/` needs `loop.reload` or the next `loop.create`.
+- **The executable rule**: a `run` that is one token naming an existing executable file is
+  spawned directly (JSON in, one JSON line out, no `$name`, no `PIRS_ARG_*`); anything with
+  whitespace, or a `~/…` token, is `sh -c` (text out). Built-in tools truncate at 50 KB, so
+  only handler tools produce by-reference results (64 KB).
+- **Process lifecycle**: every process spawned for a loop is in a group; `loop.close` waits
+  1 s, sends TERM to the groups, then KILL after 1 s more; an aborted call kills its group
+  on drop; `ETXTBSY` right after writing a script is retried.
+- **Reconnect**: per-loop subscriptions re-subscribe first with `since`, `*` last;
+  `subscribe "*"` refuses `since`, so a `*` subscriber cannot catch up on its own (the TUI
+  re-lists loops instead). The server fans out once per matching subscription, so a
+  connection on both `*` and a loop sees that loop's status twice; `SeqTracker` dedups.
+- **Registration precedence**: `register tool.<name>` is refused for a name the policy
+  defines with `run`/`loop` or for an undeclared built-in; a declaration naming a built-in is
+  a conflict (use `wrap`/`disabled`).
+- **Child loops** (`[[tool]] loop`): a child loads the same policy and sees the same tool;
+  depth is capped at 8 as an implementation limit; idle children accumulate until the parent
+  closes; the child's outcome is read from the status `detail` string.
+- `pirs ext new`/`regen` refuse a remote server (policy lives with the server, D-26; run
+  them there); the generation loop runs under the project's own policy, so an `[[input]]`
+  entry can consume its prompt (the error message says so).
+- `cargo fmt --check` has never been clean on this repo; `pirs-protocol` and `pirs-tui`
+  are, the older crates are not.
 
-## Suggested next work (in order)
+## Known gaps and candidate decisions (not taken)
 
-Superseded by `docs/design/PLAN.md`; kept for the pi-port direction only.
+- `Id` has no null variant, so a JSON-RPC parse-error reply (`id: null`) cannot be typed.
+- `LoopWaitResult.state` is always `idle`; it cannot say "closed".
+- `Manifest.tools` has no active flag; `loop.attach` is the only way to get a manifest;
+  `loop.status { detail: "created" }` carries no cwd or name, so UIs re-run `loop.list`.
+- `DslCheckResult` has no error list; parse errors ride as one-file conflicts.
+- The TUI: no per-result expand cursor, no input-line cursor movement or history, block
+  render hooks only on complete messages, `[[render]]` commands run in the TUI's cwd.
+- `pirs-tui`'s test fake broadcasts each event once per connection, not once per matching
+  subscription like the real server.
+- Print mode and `pirs ext` can leak a loop if the connection fails between `loop.create`
+  and the first subscribe/prompt (a `?` before the Ctrl-C select); same fix for both.
+- The plan's phase briefs cited scenario numbers one off from `10-functionality.md` for
+  phases 3, 5 and 6; the commits and `PLAN.md` now use the functionality file's numbers.
+- `dsl.check { cwd }` runs `[[prompt]] run` entries from whatever policy sits in a
+  client-named directory (the same trust as `loop.create` running `on start`).
 
-1. Move the pi examples path to an env var and add a CI-friendly fixture set.
-2. Compaction (auto and `/compact`), then `/tree` and `/fork` in the TUI. The session manager
-   already supports branching, forking, and compaction entries.
-3. Bind `pi.registerShortcut` keys in the TUI and parse `pi.registerFlag` flags from the CLI.
-4. Markdown rendering and expandable tool output in the TUI.
-5. Skills and prompt templates (`/skill:`, `/template`).
-6. Live-test the OpenAI provider; add Google/Responses APIs if needed.
-7. Consider promoting `secrets-protection.ts` to `examples/extensions/` after review.
+## Suggested next work
 
-## Layout reminder
-
-```
-crates/pi-ai      providers (anthropic.rs, openai.rs, faux.rs), registry.rs, oauth.rs, types.rs
-crates/pi-agent   agent_loop.rs, agent.rs, types.rs (AgentTool, events, hooks), validate.rs
-crates/pi-ext     host.rs (thread, requests, callbacks), loader.rs, strip.rs, js/runtime.js, js/*.js shims
-crates/pi-cli     main.rs (clap), agent_session.rs (glue: hooks + callbacks), tools/, session.rs,
-                  settings.rs, system_prompt.rs, modes/print.rs, modes/interactive.rs
-docs/             extensions.md (pirs), pi-extensions-reference.md, session-format.md
-examples/extensions/  seven pi examples that load in pirs
-```
+1. Run the server against a live provider (`pirs "say hi" --model anthropic/…`) and fix
+   what the faux provider could not show.
+2. Decide the six proposed entries above; then let the layer files say what the code does.
+3. An Elixir conformance server, as an experiment the user asked to record (2026-09-21):
+   the loop server is replaceable by construction (JSON-lines protocol with a schema
+   snapshot; `pirs-tui` and `pirs-client` depend on nothing server-side; the acceptance
+   scripts drive the binary through the socket). Build a phase 1 server in Elixir/OTP,
+   where connections, loops, timeouts, observers and process lifecycle are native, judged
+   by `scripts/acceptance/phase-1.sh` passing unchanged with `pirs serve` exec'ing the
+   release. A full replacement would also port providers, streaming and OAuth (`pi-ai`),
+   the agent loop (`pi-agent`), the seven tools and the session log, about 7k lines against
+   a 2k-line hub. Extensions stay separate processes in any language (D-22), never code
+   loaded into the BEAM.
+4. Phase 8 if still wanted: a pty server and a `terminal` page (S22); the web UI (S23),
+   which makes it non-optional.
+5. Remote policy sync (D-26): copying `~/.pirs/ext` to a remote server.
+6. Windows servers (D-31): the shell for `run` strings and the local transport.
+7. Smaller: `Id::Null`; a typed run outcome instead of the `detail` string; `active` in the
+   manifest; `since` for `*` subscriptions; compaction, `/tree` and `/fork` in the new TUI
+   (the session manager still supports them).

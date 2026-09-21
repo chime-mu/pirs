@@ -137,9 +137,10 @@ writes a different client against `30-protocol.md`. Nothing below is a protocol 
   page. Splits, tabs, windows, saved layouts — herdr's window features — are all buildable
   inside the client with no protocol change, and this document neither specifies nor limits
   them.
-- **Editing.** Not in the TUI. Ask the agent, or shell out to `$EDITOR` (the TUI suspends
-  and redraws on return; `ssh <server> $EDITOR` for a remote path). pirs does not build a
-  worse version of a tool the user already has.
+- **Editing.** Not in the TUI, and the TUI never suspends (D-29). Ask the agent, or open
+  `$EDITOR` in a pane beside the UI: inside tmux the UI asks tmux for the pane, with the
+  server's bridge prefix in front (`ssh build $EDITOR <path>`) for a remote or jailed
+  server. pirs does not build a worse version of a tool the user already has.
 - Agents needing attention are flagged: stopped is the server's fact, unread is the UI's own;
   no heuristics over the model's text.
 - A client-side extension point hands a recognised tool call or content block to user code

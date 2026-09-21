@@ -199,7 +199,7 @@ sees its `[[prompt]]` text in the assembled prompt.
 
 ### Phase 3 — TUI as a client
 
-**Enables:** S6, S10, S11, S12, S13 (inside tmux), S14.
+**Enables:** S6, S11, S12, S13, S14 (inside tmux), S15.
 
 **Build (**Fable** for the client and page model; Opus for config, tmux and tests):**
 
@@ -264,7 +264,7 @@ JSON in the session log; `pi-ext` is absent from `cargo metadata`.
 
 ### Phase 5 — Several agents
 
-**Enables:** S15, S16.
+**Enables:** S16, S17.
 
 **Build (Opus):** `[[tool]] loop = { model, prompt, wait = "idle" }`: the server creates a
 child loop in the same cwd, prompts it with the interpolated prompt, waits for idle, returns
@@ -278,7 +278,7 @@ idle.
 
 ### Phase 6 — Remote and contained servers
 
-**Enables:** S17, S18, S19, S20, S21.
+**Enables:** S18, S19, S20, S21.
 
 **Build (Opus; Fable reviews the reconnect path):**
 
