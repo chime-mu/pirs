@@ -597,6 +597,9 @@ impl Server {
             }
             Request::Register(p) => {
                 let handle = self.get_loop(&p.loop_id)?;
+                if let Some(why) = handle.registration_refusal(&p.slot) {
+                    return Err(RpcError::new(code::INVALID_PARAMS, why));
+                }
                 handle.register(conn.clone(), p.slot, Duration::from_millis(p.timeout));
                 empty()
             }

@@ -1,0 +1,8 @@
+intent = """
+Keep a log of when each turn ends, so I can see afterwards how long the agent worked and
+when it stopped. Start one process with the loop and let it listen until the loop closes.
+"""
+
+[[on]]
+event = "start"
+run = "./tools/watch.py"

@@ -11,13 +11,15 @@
 //! waited for.
 //!
 //! A `tool.<name>` registration becomes an [`AgentTool`] in the loop's tool
-//! set ([`HandlerTool`]). `register` carries no schema this phase, so the
+//! set ([`HandlerTool`]). `register` carries no schema, so on its own the
 //! manifest entry is the name with `{ "type": "object" }` parameters and a
-//! description naming the registrant; phase 4's `[[tool]]` with `params`
-//! supplies the real one.
+//! description naming the registrant. A `[[tool]]` declaration of the same
+//! name (`params`, no `run`) supplies the real description and schema and
+//! takes the placeholder's place; its calls still go to the registrant
+//! through [`LoopHandle::call_tool`] (D-23).
 //!
 //! The server initiates nothing else: observers are never waited on, and the
-//! only other thing it calls is a process it spawned itself (phase 2+).
+//! only other thing it calls is a process it spawned itself.
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -32,6 +34,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::LoopHandle;
+use crate::dsl::{self, Origin};
 use crate::server::{Connection, HandlerFailure};
 
 /// One `register` call: the connection, the slot and how long to wait.
@@ -43,6 +46,31 @@ pub(crate) struct Registration {
 }
 
 impl LoopHandle {
+    /// Why `slot` may not be registered on this loop, or `None`.
+    ///
+    /// Only `tool.<name>` can clash: the policy file is the declared intent
+    /// (D-22), so a name a file gives a `run` or a `loop`, and a built-in the
+    /// file has not handed over, are not something a connected client may
+    /// take over. A `[[tool]]` declaration (`params`, no `run`) is exactly
+    /// the file handing the name over, and an undeclared name is free.
+    pub(crate) fn registration_refusal(&self, slot: &Slot) -> Option<String> {
+        let Slot::Tool(name) = slot else { return None };
+        let policy = self.policy();
+        match policy.tools.iter().find(|tool| tool.name == *name) {
+            Some(tool) if matches!(tool.source, dsl::ToolSource::Handler) => None,
+            Some(tool) => {
+                let origin = tool.origins.first().map_or_else(|| "a policy file".to_owned(), Origin::to_string);
+                Some(format!(
+                    "{origin} defines tool `{name}`; only a `[[tool]]` declaration (`params`, no `run`) is served by a registrant"
+                ))
+            }
+            None if crate::tools::ALL_TOOL_NAMES.contains(&name.as_str()) => Some(format!(
+                "`{name}` is a built-in tool; a policy file has to declare it as a handler tool before a client can serve it"
+            )),
+            None => None,
+        }
+    }
+
     /// Register `slot` for `conn`. Registering the same slot twice from one
     /// connection replaces the timeout and keeps the original position.
     pub(crate) fn register(self: &Arc<Self>, conn: Arc<Connection>, slot: Slot, timeout: Duration) {
@@ -207,7 +235,7 @@ impl LoopHandle {
     /// or failing handler yields an error result.
     pub(crate) async fn call_tool(&self, name: &str, args: Value, id: &str) -> ToolReply {
         let Some(reg) = self.registrations_for(&Slot::Tool(name.to_owned())).into_iter().next() else {
-            return ToolReply::Error { error: format!("no handler registered for tool {name}") };
+            return ToolReply::Error { error: format!("no handler registered for tool `{name}`") };
         };
         let request = SlotRequest::Tool { name: name.to_owned(), payload: ToolCallPayload { args, id: id.to_owned() } };
         match self.call_slot(&reg, request).await {

@@ -1,0 +1,6 @@
+[
+  {
+    "text": "writing the note. ",
+    "toolCalls": [{ "name": "write", "arguments": { "path": "notes.txt", "content": "checkpoint me\n" } }]
+  }
+]

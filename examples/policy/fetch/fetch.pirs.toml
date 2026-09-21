@@ -1,0 +1,12 @@
+intent = """
+Give the model a tool that fetches a URL and returns its text, so it can read a page or a
+local file without a shell. Keep the result short enough to be worth reading.
+"""
+
+[[tool]]
+name = "fetch"
+description = "Fetch a URL and return its text. Handles http(s) and file URLs; HTML is reduced to its text."
+params.url = { type = "string", description = "An absolute http://, https:// or file:// URL" }
+params.max_length = { type = "integer", description = "Truncate the text to this many characters", default = 50000 }
+run = "./tools/fetch.py"
+timeout = 30

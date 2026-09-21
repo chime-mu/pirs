@@ -11,12 +11,20 @@
 //!   5 s ([`SLOT_TIMEOUT`]); a `[[tool]]` gets its own `timeout` (60 s by
 //!   default). `[[on]]` without an `emit` is fire and forget and has no
 //!   timeout at all (D-16).
-//! - **Failure.** A timeout, a non-zero exit or a process that cannot be
-//!   started is "no opinion" for that entry — the loop carries on with what
-//!   it had — plus one `ui.notify` warning naming the origin. The exception
-//!   is [`InputEntry::handled`]: consumption is declared in the file, not
+//! - **Binding.** Every `run` goes through [`RunSpec::resolve`]: an
+//!   executable is spawned directly and its stdout is one JSON line in the
+//!   slot's reply shape, parsed with [`SlotRequest::parse_reply`]; a shell
+//!   string's stdout is its reply as text (D-23, D-24). [`call_run`] is the
+//!   one place that distinction is made.
+//! - **Failure.** A timeout, a non-zero exit, a process that cannot be
+//!   started, or an executable whose stdout is not the slot's reply shape is
+//!   "no opinion" for that entry — the loop carries on with what it had —
+//!   plus one `ui.notify` warning naming the origin. The exceptions are
+//!   [`InputEntry::handled`]: consumption is declared in the file, not
 //!   decided by the process, so a `handled` entry whose `run` fails still
-//!   consumes the input and the failure is recorded as its output.
+//!   consumes the input and the failure is recorded as its output; and a
+//!   `[[tool]]`, whose failure is an error result the model reads, with
+//!   stderr as the message.
 //!
 //! Nothing here can stop the model from doing anything (D-19): a policy
 //! rewrites text, adds context, emits UI and provides tools.
@@ -31,10 +39,10 @@ use async_trait::async_trait;
 use pi_agent::{AgentTool, ToolRef, ToolResult, UpdateFn};
 use pi_ai::now_ms;
 use pirs_protocol::{
-    DslCheckResult, DslConflict, NotifyLevel, OnEvent, OnPayload, ServerPath, SlotRequest, ToolCallPayload,
-    ToolContent, ToolReply, ToolResultPayload,
+    DslCheckResult, DslConflict, InputPayload, InputReply, NotifyLevel, OnEvent, OnPayload, PromptPayload, PromptReply,
+    ServerPath, SlotReply, SlotRequest, ToolCallPayload, ToolContent, ToolReply, ToolResultPayload,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::LoopHandle;
@@ -66,6 +74,60 @@ pub(crate) fn load_warnings(policy: &Policy) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Calling a `run`
+// ---------------------------------------------------------------------------
+
+/// What a called `run` produced for a slot that expects a reply.
+pub(crate) enum Called {
+    /// A shell string's stdout: the reply as text.
+    Text(String),
+    /// An executable's one JSON line, parsed as the slot's reply.
+    Reply(SlotReply),
+}
+
+/// Why a `run` produced no reply.
+pub(crate) enum RunFailure {
+    /// The process itself: timeout, non-zero exit, could not start.
+    Call(CallError),
+    /// It exited 0 but its stdout was not the slot's reply shape.
+    BadReply(String),
+}
+
+impl std::fmt::Display for RunFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunFailure::Call(error) => write!(f, "{error}"),
+            RunFailure::BadReply(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+/// Call a `run` for `request` and read its reply the way its binding says
+/// (D-23, D-24): an executable's stdout is one JSON line in the slot's reply
+/// shape, a shell string's stdout is text. `vars` are the caller's
+/// interpolation variables and matter only for a shell string.
+pub(crate) async fn call_run(
+    spec: &RunSpec,
+    request: &SlotRequest,
+    vars: &BTreeMap<String, String>,
+    env: &CallEnv,
+    timeout: Duration,
+) -> Result<Called, RunFailure> {
+    let output = process::call(spec, &request.params(), vars, env, timeout).await.map_err(RunFailure::Call)?;
+    if !spec.is_exec() {
+        return Ok(Called::Text(output.stdout));
+    }
+    let slot = request.slot();
+    let value: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        RunFailure::BadReply(format!("reply is not one JSON line in the `{slot}` reply shape: {error}"))
+    })?;
+    request
+        .parse_reply(value)
+        .map(Called::Reply)
+        .map_err(|error| RunFailure::BadReply(format!("reply is not in the `{slot}` reply shape: {error}")))
+}
+
+// ---------------------------------------------------------------------------
 // `[[prompt]]`
 // ---------------------------------------------------------------------------
 
@@ -78,15 +140,38 @@ pub(crate) struct PromptFailure {
     pub(crate) message: String,
 }
 
+/// The `policy` section of the system prompt and what could not go in it.
+pub(crate) struct PromptSection {
+    /// The section: every text, files and shell-string `[[prompt]]` entry in
+    /// file order, each under a `# <origin>` line.
+    pub(crate) text: String,
+    /// The entries that contributed nothing, and why.
+    pub(crate) failures: Vec<PromptFailure>,
+    /// The executable `[[prompt]] run` entries, in file order. An executable
+    /// is a `prompt` handler — it receives `{ system_prompt }` and replies
+    /// `{ append }` or `{ replace }` — so it runs once the base prompt
+    /// exists, through [`prompt_executables`]. Each carries its `header`,
+    /// which prefixes whatever it appends, as it does for every other source.
+    pub(crate) executables: Vec<PromptExecutable>,
+}
+
+/// One executable `[[prompt]]` entry, held until the base prompt exists.
+pub(crate) struct PromptExecutable {
+    pub(crate) origin: Origin,
+    pub(crate) header: Option<String>,
+    pub(crate) spec: RunSpec,
+}
+
 /// Assemble the `policy` section of the system prompt: every `[[prompt]]`
 /// entry in file order, each under a `# <origin>` line so a reader of
 /// `pirs check` or of the session log can see which file asked for it (D-21).
 ///
 /// `env` is the environment a `run` entry is called with; its `cwd` is also
-/// what `files` globs and relative paths resolve against.
-pub(crate) async fn prompt_section(policy: &Policy, env: &CallEnv) -> (String, Vec<PromptFailure>) {
+/// what `files` globs, relative paths and executables resolve against.
+pub(crate) async fn prompt_section(policy: &Policy, env: &CallEnv) -> PromptSection {
     let mut blocks: Vec<String> = Vec::new();
     let mut failures = Vec::new();
+    let mut executables = Vec::new();
     for entry in &policy.prompt {
         let body = match &entry.source {
             PromptSource::Text(text) => Some(text.clone()),
@@ -115,9 +200,20 @@ pub(crate) async fn prompt_section(policy: &Policy, env: &CallEnv) -> (String, V
                 }
             }
             PromptSource::Run(run) => {
-                let payload = json!({ "system_prompt": "" });
-                match process::call(&RunSpec::Shell(run.clone()), &payload, &BTreeMap::new(), env, SLOT_TIMEOUT).await {
-                    Ok(output) => Some(output.stdout),
+                let spec = RunSpec::resolve(run, &env.cwd);
+                if spec.is_exec() {
+                    executables.push(PromptExecutable {
+                        origin: entry.origin.clone(),
+                        header: entry.header.clone(),
+                        spec,
+                    });
+                    continue;
+                }
+                // A shell string sees the section so far; its stdout is text.
+                let request = SlotRequest::Prompt(PromptPayload { system_prompt: blocks.join("\n\n") });
+                match call_run(&spec, &request, &BTreeMap::new(), env, SLOT_TIMEOUT).await {
+                    Ok(Called::Text(text)) => Some(text),
+                    Ok(Called::Reply(_)) => unreachable!("a shell string replies as text"),
                     Err(error) => {
                         failures.push(PromptFailure { origin: entry.origin.clone(), message: error.to_string() });
                         None
@@ -134,7 +230,35 @@ pub(crate) async fn prompt_section(policy: &Policy, env: &CallEnv) -> (String, V
         block.push_str(body.trim_end());
         blocks.push(block);
     }
-    (blocks.join("\n\n"), failures)
+    PromptSection { text: blocks.join("\n\n"), failures, executables }
+}
+
+/// Run the executable `[[prompt]]` entries over the assembled base prompt,
+/// in file order, each seeing the previous one's outcome: `{ append }` adds
+/// a block under the entry's `# <origin>` line (D-21), with the entry's
+/// `header` as the block's first line; `{ replace }` replaces the whole
+/// prompt. A failure is "no opinion" and lands in `failures`.
+pub(crate) async fn prompt_executables(
+    executables: &[PromptExecutable],
+    mut prompt: String,
+    env: &CallEnv,
+    failures: &mut Vec<PromptFailure>,
+) -> String {
+    for PromptExecutable { origin, header, spec } in executables {
+        let request = SlotRequest::Prompt(PromptPayload { system_prompt: prompt.clone() });
+        match call_run(spec, &request, &BTreeMap::new(), env, SLOT_TIMEOUT).await {
+            Ok(Called::Reply(SlotReply::Prompt(PromptReply::Append { append }))) => {
+                if !append.trim().is_empty() {
+                    let header = header.as_deref().map(|h| format!("{h}\n")).unwrap_or_default();
+                    prompt.push_str(&format!("\n\n# {origin}\n{header}{}", append.trim_end()));
+                }
+            }
+            Ok(Called::Reply(SlotReply::Prompt(PromptReply::Replace { replace }))) => prompt = replace,
+            Ok(_) => {}
+            Err(error) => failures.push(PromptFailure { origin: origin.clone(), message: error.to_string() }),
+        }
+    }
+    prompt
 }
 
 /// [`glob_files`] on a blocking thread: a walk of a large tree is filesystem
@@ -237,7 +361,7 @@ pub(crate) async fn check(cwd: &Path, socket: &Path) -> DslCheckResult {
 
     let mut env = CallEnv::new(cwd.to_path_buf(), "prompt");
     env.socket = socket.to_path_buf();
-    let (section, failures) = prompt_section(&policy, &env).await;
+    let PromptSection { text: section, mut failures, executables } = prompt_section(&policy, &env).await;
 
     let selected = selected_tool_names(&policy, &manifest);
     let chosen: Vec<&ToolRef> = builtin
@@ -267,6 +391,9 @@ pub(crate) async fn check(cwd: &Path, socket: &Path) -> DslCheckResult {
         options.sections.insert(PROMPT_SECTION.to_owned(), section);
     }
 
+    let base = crate::system_prompt::build_system_prompt(&options);
+    let system_prompt = prompt_executables(&executables, base, &env, &mut failures).await;
+
     let mut conflicts = dsl::check_conflicts(&policy);
     for failure in failures {
         conflicts.push(DslConflict {
@@ -279,7 +406,7 @@ pub(crate) async fn check(cwd: &Path, socket: &Path) -> DslCheckResult {
         manifest,
         conflicts,
         rendered: dsl::render(&policy),
-        system_prompt: crate::system_prompt::build_system_prompt(&options),
+        system_prompt,
     }
 }
 
@@ -322,6 +449,11 @@ impl LoopHandle {
         }
     }
 
+    /// The binding a `run` gets on this loop: resolved against its cwd.
+    pub(crate) fn run_spec(&self, run: &str) -> RunSpec {
+        RunSpec::resolve(run, &self.cwd)
+    }
+
     /// One warning naming the entry that produced it.
     pub(crate) fn policy_warn(&self, origin: &Origin, message: impl std::fmt::Display) {
         let text = format!("{origin}: {message}");
@@ -346,19 +478,31 @@ impl LoopHandle {
                     }
                 }
                 Some(run) => {
-                    let command = process::interpolate(run, &vars);
-                    let payload = json!({ "text": text });
+                    let spec = self.run_spec(run);
+                    let command = if spec.is_exec() { run.clone() } else { process::interpolate(run, &vars) };
+                    let request = SlotRequest::Input(InputPayload { text: text.clone() });
                     let env = self.call_env("input");
-                    let outcome =
-                        process::call(&RunSpec::Shell(run.clone()), &payload, &vars, &env, SLOT_TIMEOUT).await;
-                    match (outcome, entry.handled) {
+                    let outcome = call_run(&spec, &request, &vars, &env, SLOT_TIMEOUT).await;
+                    // A shell string's stdout and an executable's `{ text }`
+                    // are the same thing: the text to hand on.
+                    let replied = match outcome {
+                        Ok(Called::Text(out)) => Ok(Some(out)),
+                        Ok(Called::Reply(SlotReply::Input(InputReply::Text { text }))) => Ok(Some(text)),
+                        Ok(Called::Reply(SlotReply::Input(InputReply::Handled { .. }))) => Ok(None),
+                        Ok(Called::Reply(_)) => unreachable!("an input request parses input replies"),
+                        Err(error) => Err(error),
+                    };
+                    match (replied, entry.handled) {
                         // The output of a consumed command enters the
                         // conversation as the shell execution it was (D-32).
-                        (Ok(output), true) => {
-                            self.record_command(command, output.stdout, Some(0));
+                        (Ok(Some(out)), true) => {
+                            self.record_command(command, out, Some(0));
                             return None;
                         }
-                        (Ok(output), false) => text = output.stdout,
+                        (Ok(Some(out)), false) => text = out,
+                        // The executable said `{ handled: true }`: consumed,
+                        // whatever the file said.
+                        (Ok(None), _) => return None,
                         (Err(error), true) => {
                             self.policy_warn(&entry.origin, &error);
                             let (output, code) = failure_output(&error);
@@ -415,19 +559,23 @@ impl LoopHandle {
             if entry.tool != tool {
                 continue;
             }
-            let payload = json!(ToolResultPayload {
+            let request = SlotRequest::ToolResult(ToolResultPayload {
                 tool: tool.to_owned(),
                 args: args.clone(),
                 result: result.clone(),
             });
             let env = self.call_env("tool_result");
-            match process::call(&RunSpec::Shell(entry.run.clone()), &payload, &BTreeMap::new(), &env, SLOT_TIMEOUT)
-                .await
-            {
-                Ok(output) => {
-                    result = ToolReply::Ok { content: ToolContent::Text(output.stdout), details: None };
+            let spec = self.run_spec(&entry.run);
+            match call_run(&spec, &request, &BTreeMap::new(), &env, SLOT_TIMEOUT).await {
+                Ok(Called::Text(text)) => {
+                    result = ToolReply::Ok { content: ToolContent::Text(text), details: None };
                     by = Some(entry.origin.to_string());
                 }
+                Ok(Called::Reply(SlotReply::ToolResult(reply))) => {
+                    result = reply.result;
+                    by = Some(entry.origin.to_string());
+                }
+                Ok(Called::Reply(_)) => unreachable!("a tool_result request parses tool_result replies"),
                 Err(error) => self.policy_warn(&entry.origin, &error),
             }
         }
@@ -467,7 +615,7 @@ impl LoopHandle {
             // outlive the event and become a connected client.
             let OnSource::Run(run) = &entry.source else { return };
             let env = self.call_env(slot);
-            match process::spawn_detached(&RunSpec::Shell(run.clone()), params, &BTreeMap::new(), &env).await {
+            match process::spawn_detached(&self.run_spec(run), params, &BTreeMap::new(), &env).await {
                 Ok(spawned) => {
                     let this = self.clone();
                     let origin = entry.origin.clone();
@@ -483,10 +631,12 @@ impl LoopHandle {
             }
             return;
         };
+        // `on.*` takes no reply, so an executable's stdout is its output as
+        // text here too: the status value, the widget's lines.
         let text = match &entry.source {
             OnSource::Run(run) => {
                 let env = self.call_env(slot);
-                match process::call(&RunSpec::Shell(run.clone()), params, &BTreeMap::new(), &env, SLOT_TIMEOUT).await {
+                match process::call(&self.run_spec(run), params, &BTreeMap::new(), &env, SLOT_TIMEOUT).await {
                     Ok(output) => output.stdout,
                     Err(error) => {
                         self.policy_warn(&entry.origin, &error);
@@ -517,10 +667,11 @@ impl LoopHandle {
     /// built-in of the same name, if there is one: a `wrap` keeps its name,
     /// description and schema and only changes what runs.
     pub(crate) fn policy_tool(self: &Arc<Self>, tool: &ResolvedTool, builtin: Option<&ToolRef>) -> ToolRef {
-        let run = match (&tool.wrap, &tool.source) {
-            (Some(wrap), _) => Some(wrap.clone()),
-            (None, ToolSource::Run(run)) => Some(run.clone()),
-            (None, ToolSource::Loop(_)) => None,
+        let backend = match (&tool.wrap, &tool.source) {
+            (Some(wrap), _) => Backend::Run(wrap.clone()),
+            (None, ToolSource::Run(run)) => Backend::Run(run.clone()),
+            (None, ToolSource::Handler) => Backend::Handler,
+            (None, ToolSource::Loop(_)) => Backend::Loop,
             // A modifier entry that neither disables nor wraps leaves the
             // built-in exactly as it was.
             (None, ToolSource::Builtin) => return builtin.cloned().expect("a built-in source has a built-in"),
@@ -540,7 +691,7 @@ impl LoopHandle {
             parameters,
             snippet: builtin.and_then(|b| b.prompt_snippet()),
             guidelines: builtin.map(|b| b.prompt_guidelines()).unwrap_or_default(),
-            run,
+            backend,
             timeout: tool.timeout,
         })
     }
@@ -575,9 +726,9 @@ fn input_vars(entry: &InputEntry, text: &str) -> Option<BTreeMap<String, String>
 }
 
 /// What a failed `handled` command records as its output.
-fn failure_output(error: &CallError) -> (String, Option<i32>) {
+fn failure_output(error: &RunFailure) -> (String, Option<i32>) {
     match error {
-        CallError::NonZero { status, stderr, stdout } => {
+        RunFailure::Call(CallError::NonZero { status, stderr, stdout }) => {
             let mut text = stdout.clone();
             if !stderr.trim().is_empty() {
                 if !text.is_empty() {
@@ -595,11 +746,24 @@ fn failure_output(error: &CallError) -> (String, Option<i32>) {
 // A tool the policy declared
 // ---------------------------------------------------------------------------
 
-/// A `[[tool]]` with a shell `run`, or a built-in the policy wrapped.
-///
-/// The call arrives as [`ToolCallPayload`] on stdin; a shell string also gets
-/// every argument as `$name` and as `PIRS_ARG_<name>`, so `run = "curl $url"`
-/// and `run = "curl \"$PIRS_ARG_url\""` both work (D-24).
+/// What answers a policy tool's calls.
+enum Backend {
+    /// A `run` (or `wrap`): a called process. An executable reads
+    /// `{ args, id }` on stdin and replies `{ content, details? }` or
+    /// `{ error }` on stdout; a shell string also gets every argument as
+    /// `$name` and as `PIRS_ARG_<name>`, so `run = "curl $url"` and
+    /// `run = "curl \"$PIRS_ARG_url\""` both work (D-24), and its stdout is
+    /// the result as text.
+    Run(String),
+    /// A declaration: the connected client that registered `tool.<name>`
+    /// answers, with its registered timeout (D-23).
+    Handler,
+    /// `loop = { … }`, which phase 5 fills in.
+    Loop,
+}
+
+/// A `[[tool]]` the policy defines: a called process, a declaration a
+/// connected handler serves, or a built-in the policy wrapped.
 struct PolicyTool {
     handle: Weak<LoopHandle>,
     name: String,
@@ -607,8 +771,7 @@ struct PolicyTool {
     parameters: Value,
     snippet: Option<String>,
     guidelines: Vec<String>,
-    /// `None` for `loop = { … }`, which phase 5 fills in.
-    run: Option<String>,
+    backend: Backend,
     timeout: Duration,
 }
 
@@ -644,34 +807,71 @@ impl AgentTool for PolicyTool {
         let Some(handle) = self.handle.upgrade() else {
             anyhow::bail!("loop closed");
         };
-        let Some(run) = &self.run else {
-            anyhow::bail!("tool {}: loop tools arrive in phase 5", self.name);
+        let run = match &self.backend {
+            Backend::Run(run) => run,
+            Backend::Loop => anyhow::bail!("tool {}: loop tools arrive in phase 5", self.name),
+            Backend::Handler => {
+                // The registrant's timeout applies; an abort or close must
+                // not wait it out.
+                let reply = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => anyhow::bail!("aborted"),
+                    reply = handle.call_tool(&self.name, args, tool_call_id) => reply,
+                };
+                return reply_to_result(&reply);
+            }
         };
-        let payload = json!(ToolCallPayload { args: args.clone(), id: tool_call_id.to_owned() });
-        let vars = process::payload_vars(&args);
+        let request = SlotRequest::Tool {
+            name: self.name.clone(),
+            payload: ToolCallPayload { args: args.clone(), id: tool_call_id.to_owned() },
+        };
+        let spec = handle.run_spec(run);
         let mut env = handle.call_env(format!("tool.{}", self.name));
-        if let Some(map) = args.as_object() {
-            for (key, value) in map {
-                env.extra.push((format!("PIRS_ARG_{key}"), process::env_value(value)));
+        // The arguments are one level down in the payload, so the shell
+        // string's `$name` and `PIRS_ARG_<name>` come from here (D-24). An
+        // executable reads the JSON line and gets neither.
+        let vars = if spec.is_exec() { BTreeMap::new() } else { process::payload_vars(&args) };
+        if !spec.is_exec() {
+            if let Some(map) = args.as_object() {
+                for (key, value) in map {
+                    env.extra.push((format!("PIRS_ARG_{key}"), process::env_value(value)));
+                }
             }
         }
-        let spec = RunSpec::Shell(run.clone());
-        let call = process::call(&spec, &payload, &vars, &env, self.timeout);
+        // Dropping the call — an abort — kills the process group (D-23).
+        let call = call_run(&spec, &request, &vars, &env, self.timeout);
         let outcome = tokio::select! {
             biased;
             () = cancel.cancelled() => anyhow::bail!("aborted"),
             outcome = call => outcome,
         };
         match outcome {
-            Ok(output) => Ok(ToolResult {
-                content: vec![pi_ai::Content::text(output.stdout)],
-                details: None,
-                usage: None,
-                terminate: false,
-            }),
-            Err(error) => anyhow::bail!("{error}"),
+            Ok(Called::Text(text)) => Ok(ToolResult::text(text)),
+            Ok(Called::Reply(SlotReply::Tool(reply))) => reply_to_result(&reply),
+            Ok(Called::Reply(_)) => unreachable!("a tool request parses tool replies"),
+            // A non-zero exit is an error result with stderr as the message
+            // (or "exited with status N" when stderr is empty); a malformed
+            // reply is one too, and is also worth a warning, because the
+            // model cannot fix the script.
+            Err(RunFailure::Call(error)) => anyhow::bail!("{error}"),
+            Err(RunFailure::BadReply(message)) => {
+                if let Some(origin) = handle.policy().tools.iter().find(|t| t.name == self.name).and_then(|t| t.origins.first()) {
+                    handle.policy_warn(origin, &message);
+                }
+                anyhow::bail!("{message}")
+            }
         }
     }
+}
+
+/// A handler's or executable's [`ToolReply`] as the agent's result: `Ok` as
+/// is, `Error` as the `Err` the agent records as an error result.
+fn reply_to_result(reply: &ToolReply) -> anyhow::Result<ToolResult> {
+    let (result, is_error) = crate::convert::result_from_reply(reply);
+    if is_error {
+        anyhow::bail!("{}", result.content.iter().filter_map(pi_ai::Content::as_text).collect::<Vec<_>>().join(""));
+    }
+    Ok(result)
 }
 
 /// `[[on]] event = "start"` identity across a reload: the same file, slot,
@@ -797,7 +997,8 @@ mod tests {
              [[prompt]]\nrun = 'exit 3'\n",
         )]);
         let env = CallEnv::new(dir.path().to_path_buf(), "prompt");
-        let (text, failures) = prompt_section(&policy, &env).await;
+        let PromptSection { text, failures, executables } = prompt_section(&policy, &env).await;
+        assert!(executables.is_empty(), "shell strings are not deferred");
         assert!(text.contains("# /p/a.pirs.toml: [[prompt]] #1\nAlways."), "{text}");
         assert!(text.contains("<file path=") && text.contains("Be kind."), "{text}");
         assert!(text.contains("Head:\nran"), "{text}");

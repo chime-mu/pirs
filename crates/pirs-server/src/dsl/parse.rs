@@ -107,8 +107,7 @@ struct RawCommand {
 struct RawTool {
     name: String,
     description: Option<String>,
-    #[serde(default)]
-    params: BTreeMap<String, Value>,
+    params: Option<BTreeMap<String, Value>>,
     run: Option<String>,
     timeout: Option<u64>,
     r#loop: Option<RawLoop>,
@@ -287,7 +286,7 @@ pub(super) fn parse_file(path: &Path, text: &str) -> Result<PolicyFile, Vec<Stri
     for (index, raw) in entries::<RawTool>(&doc, "tool", &mut errors) {
         let origin = Origin { file: path.to_path_buf(), slot: "tool", index };
         let mut bad = false;
-        for (name, spec) in &raw.params {
+        for (name, spec) in raw.params.iter().flatten() {
             if !spec.is_object() {
                 errors.push(format!("{origin}: `params.{name}` must be a table of JSON Schema keys"));
                 bad = true;
@@ -297,8 +296,19 @@ pub(super) fn parse_file(path: &Path, text: &str) -> Result<PolicyFile, Vec<Stri
             errors.push(format!("{origin}: `run` and `loop` are alternatives, not both"));
             bad = true;
         }
-        if raw.run.is_none() && raw.r#loop.is_none() && !raw.disabled && raw.wrap.is_none() {
-            errors.push(format!("{origin}: a tool needs `run`, `loop`, `disabled` or `wrap`"));
+        // `timeout` is how long the server waits for the process it spawns:
+        // a `run`, or the `wrap` a built-in's call is routed through. With
+        // neither there is no such process, and saying `timeout` there reads
+        // as a promise the server cannot keep.
+        if raw.timeout.is_some() && raw.run.is_none() && raw.wrap.is_none() {
+            errors.push(format!("{origin}: `timeout` needs `run`; a declared tool uses its registrant's timeout"));
+            bad = true;
+        }
+        // `params` with neither `run` nor `loop` declares a tool a connected
+        // handler serves (D-23); `params = {}` declares one with no arguments.
+        let declared = raw.params.is_some() && raw.run.is_none() && raw.r#loop.is_none();
+        if !declared && raw.run.is_none() && raw.r#loop.is_none() && !raw.disabled && raw.wrap.is_none() {
+            errors.push(format!("{origin}: a tool needs `run`, `loop`, `params`, `disabled` or `wrap`"));
             bad = true;
         }
         if bad {
@@ -308,7 +318,8 @@ pub(super) fn parse_file(path: &Path, text: &str) -> Result<PolicyFile, Vec<Stri
             origin,
             name: raw.name,
             description: raw.description,
-            params: raw.params,
+            params: raw.params.unwrap_or_default(),
+            declared,
             run: raw.run,
             timeout: raw.timeout.map_or(DEFAULT_TOOL_TIMEOUT, Duration::from_secs),
             loop_spec: raw.r#loop.map(|l| LoopSpec { model: l.model, prompt: l.prompt, wait: l.wait }),

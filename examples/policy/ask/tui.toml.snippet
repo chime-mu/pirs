@@ -1,0 +1,11 @@
+# Add this to ~/.pirs/tui.toml. It is the *client's* configuration, not policy:
+# the server has no idea the `ask` tool is special, and does not need one.
+#
+# `run` is a shell command the TUI spawns with the tool call as one JSON line on
+# stdin: {"tool": "ask", "args": {...}, "id": "..."}. It reads back one line of
+# {"lines": [...], "options": [...]}. A non-empty `options` opens a picker, and
+# the chosen string is sent to the loop as the next prompt.
+
+[[render]]
+tool = "ask"
+run = "./tools/ask-render.py"

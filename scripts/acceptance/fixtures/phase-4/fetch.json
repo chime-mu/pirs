@@ -1,0 +1,6 @@
+[
+  {
+    "text": "reading the file. ",
+    "toolCalls": [{ "name": "fetch", "arguments": { "url": "file://@PROJECT@/data.txt" } }]
+  }
+]

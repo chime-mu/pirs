@@ -142,8 +142,9 @@ fn merge_settings(policy: &mut Policy, settings: &SettingsTable, path: &std::pat
 
 /// Apply every `[[tool]]` entry for one name.
 ///
-/// A *base* entry (`run` or `loop`) defines the tool; a modifier only
-/// `disabled`s or `wrap`s one. Two bases are the conflict `40-dsl.md` names;
+/// A *base* entry (`run`, `loop`, or a `params` declaration served by a
+/// connected handler) defines the tool; a modifier only `disabled`s or
+/// `wrap`s one. Two bases are the conflict `40-dsl.md` names;
 /// a base plus any number of modifiers is one resolved tool, and so is a
 /// modifier alone when the name is a built-in.
 fn resolve_tool(policy: &mut Policy, name: &str, group: &[ToolEntry]) {
@@ -170,7 +171,20 @@ fn resolve_tool(policy: &mut Policy, name: &str, group: &[ToolEntry]) {
         Some(entry) => match (&entry.run, &entry.loop_spec) {
             (Some(run), _) => ToolSource::Run(run.clone()),
             (None, Some(spec)) => ToolSource::Loop(spec.clone()),
-            (None, None) => unreachable!("a base entry has `run` or `loop`"),
+            // A declaration hands the name to a connected registrant, and a
+            // built-in's name is not the file's to give away: say so and
+            // leave the built-in as it was (D-22).
+            (None, None) if builtin => {
+                policy.conflicts.push(DslConflict {
+                    message: format!(
+                        "built-in `{name}` declared as a handler tool; use `wrap` or `disabled` ({})",
+                        entry.origin
+                    ),
+                    files: vec![server_path(&entry.origin.file)],
+                });
+                ToolSource::Builtin
+            }
+            (None, None) => ToolSource::Handler,
         },
         None if builtin => ToolSource::Builtin,
         None => {

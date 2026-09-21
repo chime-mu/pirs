@@ -1,0 +1,14 @@
+[
+  {
+    "text": "noting the plan. ",
+    "toolCalls": [
+      {
+        "name": "write",
+        "arguments": {
+          "path": ".pirs/todo.md",
+          "content": "- [x] finish phase 4\n- [ ] ship it\n"
+        }
+      }
+    ]
+  }
+]

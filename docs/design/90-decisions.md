@@ -381,3 +381,26 @@ honours; dropping it would remove a capability rather than relocate it. The tabl
 has four keys: `model`, `thinking`, `tools`, `tool_execution`. `deny_unknown_fields` keeps
 it closed. `settings.json` is no longer read; `models.json` (a provider catalogue, not a
 setting) still is.
+
+**D-42 · proposed · 2026-09-21 · A `[[tool]]` without `run` or `loop` declares a tool served by a connected handler.**
+Recorded by the orchestrator during phase 4. `40-dsl.md` gives `[[tool]]` three shapes: `run`
+(a called process), `loop` (another agent), and `disabled`/`wrap` of a built-in. S9 says a
+long-lived extension "registers for the hooks it wants", and `register { slot: "tool.<name>" }`
+carries no schema, so a connected process could only offer the model a tool with an empty
+parameter schema. Rather than add fields to `register`, a `[[tool]]` with `params` and neither
+`run` nor `loop` is a declaration: it supplies the manifest entry (description, schema) and a
+call is dispatched to whichever connection registered `tool.<name>` on the loop, under that
+registrant's timeout; with no registrant the model sees an error result. The pairing keeps the
+schema where every other tool's schema lives, in the policy file, and keeps `register` as it is.
+Evidence: the `watch`/`fetch` examples and the phase 4 acceptance need it.
+
+**D-43 · proposed · 2026-09-21 · An executable `[[prompt]] run` is a prompt handler, the one exception to concatenation.**
+Recorded by the orchestrator during phase 4. `40-dsl.md` composes `prompt` entries by
+concatenation in file order, and `30-protocol.md` gives the `prompt` slot the reply
+`{ append }` or `{ replace }`. A shell-string `[[prompt]] run` is a text block and
+concatenates; an executable `[[prompt]] run` speaks the slot's payload and reply, so it must
+see the assembled prompt as `{ system_prompt }` and may `replace` it. Rule: executable prompt
+entries run after every `text`, `files` and shell entry, in file order, over the assembled
+prompt, each seeing the previous one's result; registered `prompt` handlers run after them.
+`{ append }` is recorded under the entry's origin like any other block (D-21). Evidence: the
+phase 4 implementation had to choose, and `docs/dsl.md` already states it.

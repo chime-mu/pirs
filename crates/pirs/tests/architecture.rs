@@ -20,11 +20,11 @@
 //! here in phase 1, now that `pirs` is the crate that depends on all the
 //! others. Phase 3 added `pirs-tui` → `{pirs-protocol, pirs-client}` and, at
 //! its end, deleted the row of the crate the interactive mode came out of
-//! (D-04); phase 4 deletes the `pi-ext` row. Edit `EXPECTED` and nothing
-//! else.
+//! (D-04); phase 4 deleted the `pi-ext` row with the crate itself, when
+//! extensions became DSL policy plus processes (D-22). Edit `EXPECTED` and
+//! nothing else.
 //!
-//! `pi-ext` is the last row here that the finished architecture does not
-//! have: nothing depends on it any more and it goes in phase 4.
+//! Every row here is now a crate the finished architecture has.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -36,7 +36,6 @@ use std::process::Command;
 const EXPECTED: &[(&str, &[&str])] = &[
     ("pi-ai", &[]),
     ("pi-agent", &["pi-ai"]),
-    ("pi-ext", &["pi-ai", "pi-agent"]),
     ("pirs-protocol", &[]),
     ("pirs-server", &["pi-ai", "pi-agent", "pirs-protocol"]),
     ("pirs-client", &["pirs-protocol"]),

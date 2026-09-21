@@ -346,19 +346,26 @@ impl LoopHandle {
     }
 
     /// Every tool the model could be given, after the policy has had its say:
-    /// built-ins (dropped when `disabled`, routed through a `wrap`, hidden
-    /// behind a handler of the same name), then the tools the policy
-    /// declares, then handler tools.
+    /// built-ins (dropped when `disabled`, routed through a `wrap`), then the
+    /// tools the policy defines, then the tools registered handlers provide.
+    ///
+    /// A `[[tool]]` declaration (`params`, no `run`) and a `register
+    /// tool.<name>` pair up: the declaration supplies the description and
+    /// schema, the registrant answers the calls. The placeholder a bare
+    /// registration would contribute is dropped for a declared name; an
+    /// undeclared registration keeps its `{ "type": "object" }` placeholder.
+    /// Nothing here has to resolve a clash between a registration and a name
+    /// the file already defines: [`LoopHandle::registration_refusal`] turned
+    /// that registration away (D-22).
     pub(crate) fn available_tools(self: &Arc<Self>) -> Vec<ToolRef> {
         let policy = self.policy();
-        let handler_tools = self.handler_tools();
-        let taken = |name: &str| handler_tools.iter().any(|h| h.name() == name);
+        let declared = |name: &str| {
+            policy.tools.iter().any(|t| t.name == name && !t.disabled && matches!(t.source, dsl::ToolSource::Handler))
+        };
+        let handler_tools: Vec<ToolRef> = self.handler_tools().into_iter().filter(|h| !declared(&h.name())).collect();
         let mut all: Vec<ToolRef> = Vec::new();
         for builtin in &self.builtin {
             let name = builtin.name();
-            if taken(&name) {
-                continue;
-            }
             match policy.tools.iter().find(|tool| tool.name == name) {
                 Some(tool) if tool.disabled => continue,
                 Some(tool) => all.push(self.policy_tool(tool, Some(builtin))),
@@ -366,7 +373,7 @@ impl LoopHandle {
             }
         }
         for tool in &policy.tools {
-            if tool.disabled || taken(&tool.name) || self.builtin.iter().any(|b| b.name() == tool.name) {
+            if tool.disabled || self.builtin.iter().any(|b| b.name() == tool.name) {
                 continue;
             }
             all.push(self.policy_tool(tool, None));
@@ -519,15 +526,15 @@ impl LoopHandle {
 
     /// The system prompt as the next request will see it: the policy's
     /// `[[prompt]]` entries as the `<policy>` section of the base prompt,
-    /// then the registered `prompt` handlers on top. Returns the tools, the
-    /// base (policy included) and the final prompt, and leaves the final one
-    /// on the agent.
+    /// then the policy's executable `[[prompt]]` entries and the registered
+    /// `prompt` handlers on top, in that order. Returns the tools, the base
+    /// (policy section included) and the final prompt, and leaves the final
+    /// one on the agent.
     pub(crate) async fn assemble_prompt(self: &Arc<Self>) -> (Vec<ToolRef>, String, String) {
         let policy = self.policy();
-        let (section, failures) = policy::prompt_section(&policy, &self.call_env("prompt")).await;
-        for failure in failures {
-            self.policy_warn(&failure.origin, failure.message);
-        }
+        let env = self.call_env("prompt");
+        let policy::PromptSection { text: section, mut failures, executables } =
+            policy::prompt_section(&policy, &env).await;
         {
             let mut options = self.prompt_options.lock().unwrap_or_else(|e| e.into_inner());
             if section.is_empty() {
@@ -537,7 +544,11 @@ impl LoopHandle {
             }
         }
         let (chosen, base) = self.refresh_tools();
-        let prompt = self.dispatch_prompt(base.clone()).await;
+        let prompt = policy::prompt_executables(&executables, base.clone(), &env, &mut failures).await;
+        for failure in failures {
+            self.policy_warn(&failure.origin, failure.message);
+        }
+        let prompt = self.dispatch_prompt(prompt).await;
         self.agent.set_system_prompt(prompt.clone());
         (chosen, base, prompt)
     }

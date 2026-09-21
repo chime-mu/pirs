@@ -1,0 +1,13 @@
+intent = """
+Two shortcuts on what I type: a leading ? asks for a brief answer, and a leading ! runs the
+rest as a shell command without the model ever seeing it.
+"""
+
+[[input]]
+match = '^\?(.*)'
+replace = "Explain briefly: $1"
+
+[[input]]
+match = '^!(.*)'
+handled = true
+run = "$1"

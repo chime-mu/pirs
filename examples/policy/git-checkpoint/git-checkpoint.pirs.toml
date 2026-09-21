@@ -1,0 +1,9 @@
+intent = """
+Commit everything after every turn, so I can undo whatever the agent did to the working
+tree with one git command and never lose an intermediate state.
+"""
+
+[[on]]
+event = "turn_end"
+run = "git add -A && git commit -qm 'pirs checkpoint' || true"
+quiet = true

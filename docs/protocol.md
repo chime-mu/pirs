@@ -328,6 +328,16 @@ As a called process, the same `input` handler reads and writes bare payloads:
 {"text":"Review the working tree under src."}
 ```
 
+**Declared tools.** `register { slot: "tool.<name>" }` carries no schema. On its own it
+puts `<name>` in the manifest with `{ "type": "object" }` parameters and a description
+naming the registrant. A `[[tool]]` in a policy file with `params` and no `run` *declares*
+the tool — description and schema in the manifest from the file, calls answered by
+whichever connection registered `tool.<name>`, within that registration's timeout. A call
+while nobody is registered is the error result ``no handler registered for tool `<name>` ``.
+The registrant is unregistered when it disconnects, and a process the server started for
+the loop is killed when the loop closes, so a declared tool outlives its server only as a
+line in a manifest.
+
 ## Payloads by reference
 
 Any single content above **64 KB** travels by reference: the server writes it to the loop's
@@ -399,8 +409,8 @@ does not use. Display it; hand it back; nothing else.
 ## The environment of a called process
 
 The server spawns a called process in the loop's cwd, writes the slot payload as one JSON
-line to its stdin, reads one JSON line from its stdout, and kills it when the loop closes.
-Four variables are in its environment:
+line to its stdin, reads its stdout, and kills it when the loop closes. Four variables are
+in its environment:
 
 | Variable | Value |
 |---|---|
@@ -409,21 +419,38 @@ Four variables are in its environment:
 | `PIRS_SLOT` | the slot that fired, in its string form (`input`, `tool.fetch`, `on.turn_end`, …) |
 | `PIRS_SESSION_DIR` | the loop's session directory, where by-reference payloads live |
 
+Which binding a `run` gets is one rule, in `dsl.md`: a single token naming an existing
+executable file (relative to the cwd, or absolute) is an **executable**; anything else is a
+**shell string**.
+
+An executable is spawned directly with no arguments. It gets the four variables and the
+payload line, and nothing else: no shell, no `$field` interpolation, no `PIRS_ARG_*`. Its
+stdout is **one JSON line in the slot's reply shape** from the table above — exactly what a
+connected handler would send as the `result` of its response — and `on.<event>` expects
+none. A line that is not valid JSON of that shape counts as "no opinion" plus a `ui.notify`
+warning naming the policy entry and the parse error; a non-zero exit is an error whose
+message is stderr, which for a `tool.<name>` is the error result the model reads and for
+the other slots is "no opinion" plus a warning.
+
 A shell-string `run` additionally gets every top-level payload field as `PIRS_ARG_<field>`
-and as `$field` interpolation, so a one-liner never parses the JSON (D-24). A field larger
-than 64 KiB is on stdin only: the kernel refuses an `exec` over 128 KiB of environment and
-arguments, so such a field is left off `PIRS_ARG_*` and `$field` substitutes the empty
-string. `dsl.check` runs
-a `[[prompt]] run` the same way with an empty `PIRS_LOOP`, because there is no loop yet.
+and as `$field` interpolation, so a one-liner never parses the JSON (D-24), and its stdout
+is the reply as text. A field larger than 64 KiB is on stdin only: the kernel refuses an
+`exec` over 128 KiB of environment and arguments, so such a field is left off `PIRS_ARG_*`
+and `$field` substitutes the empty string. `dsl.check` runs a `[[prompt]] run` the same
+way with an empty `PIRS_LOOP`, because there is no loop yet.
 
 A process that only answers its slot ignores all four. One that wants to steer the loop —
 emit `ui.status`, prompt another loop, register more slots — connects to `PIRS_SOCKET`, says
-`hello`, and is an ordinary client from then on.
+`hello`, and is an ordinary client from then on. A process started from `on.start` is not
+waited for, so it may do exactly that and stay: connect, `hello`, `register`, serve, until
+the loop closes.
 
-"Kills it when the loop closes" gives a process that was started a moment earlier — the
-`[[on]] event = "turn_end"` checkpoint of the run that just ended — a second to finish on
-its own first. Anything still running after that is asked to stop: its whole process group
-gets `SIGTERM`, and `SIGKILL` a second later if it is still there.
+**Lifecycle.** Every process the server spawns belongs to a loop and dies with it. On
+`loop.close`, a process that was started a moment earlier — the `[[on]] event = "turn_end"`
+checkpoint of the run that just ended — gets a second to finish on its own. Anything still
+running after that is asked to stop: its whole process group gets `SIGTERM`, and `SIGKILL`
+a second later if it is still there. A called executable whose tool call is aborted
+(`loop.abort`) has its process group killed at once.
 
 ## Proposed, not yet accepted
 

@@ -1,0 +1,11 @@
+[
+  {
+    "text": "one decision first. ",
+    "toolCalls": [
+      {
+        "name": "ask",
+        "arguments": { "question": "Deploy?", "options": ["yes", "no"] }
+      }
+    ]
+  }
+]

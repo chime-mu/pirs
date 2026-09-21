@@ -1,0 +1,19 @@
+intent = """
+Let the agent ask me a multiple-choice question as structured data instead of a paragraph,
+so a UI that knows the convention can draw a picker and I answer with one key.
+"""
+
+[[tool]]
+name = "ask"
+description = "Ask the user a question with a fixed set of answers. Call this, then stop and wait; the user's choice arrives as the next message."
+params.question = { type = "string", description = "The question, in one sentence" }
+params.options = { type = "array", items = { type = "string" }, description = "The answers to offer, in order" }
+run = "./tools/ask.py"
+
+[[prompt]]
+text = """
+When you need a decision from the user and the answers are a short fixed set, call the
+`ask` tool with the question and the options rather than writing the question in prose.
+Then stop: end your turn and wait. The answer arrives as the user's next message. Do not
+guess, and do not call `ask` twice before an answer comes back.
+"""

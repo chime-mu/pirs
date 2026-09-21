@@ -242,6 +242,10 @@ pub struct ToolEntry {
     /// `params.<field> = { type, description, default, … }`, each a JSON
     /// Schema fragment for one argument.
     pub params: BTreeMap<String, Value>,
+    /// `params` was written and neither `run` nor `loop` was: the entry
+    /// declares a tool that a connected client serves by registering
+    /// `tool.<name>` (D-23).
+    pub declared: bool,
     /// The executable or shell string the call runs.
     pub run: Option<String>,
     /// `timeout`, in seconds; [`DEFAULT_TOOL_TIMEOUT`] when absent.
@@ -258,7 +262,7 @@ impl ToolEntry {
     /// A *base* entry defines the tool; a modifier only disables or wraps
     /// one defined elsewhere (or a built-in).
     fn is_base(&self) -> bool {
-        self.run.is_some() || self.loop_spec.is_some()
+        self.run.is_some() || self.loop_spec.is_some() || self.declared
     }
 }
 
@@ -350,6 +354,9 @@ pub enum ToolSource {
     Run(String),
     /// A second loop.
     Loop(LoopSpec),
+    /// Declared here, served by whichever connected client registered
+    /// `tool.<name>` on the loop (D-23).
+    Handler,
 }
 
 /// A tool after every `[[tool]]` entry for its name has been applied.
@@ -711,6 +718,7 @@ pub fn render(policy: &Policy) -> String {
                 ToolSource::Builtin => "built-in".to_owned(),
                 ToolSource::Run(run) => format!("run {run:?}"),
                 ToolSource::Loop(spec) => format!("loop {} wait {}", spec.model, spec.wait),
+                ToolSource::Handler => "handler (a client registering tool.<name>)".to_owned(),
             };
             let mut extra = Vec::new();
             if tool.disabled {

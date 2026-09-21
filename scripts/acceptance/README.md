@@ -20,6 +20,15 @@ phase passes; every check prints one line.
   with their states, the attention flag appearing on idle and clearing when the page is
   viewed, a scripted tool write refreshing an open file page, a `[[render]]` picker whose
   choice becomes the next prompt, and the old interactive mode gone from `cargo metadata`.
+- `phase-4.sh` — executables and connected handlers (S5, S7, S8, S9): the six examples
+  under `examples/policy/` installed the way their READMEs say, then driven — `fetch`'s
+  Python script answering a scripted call and its text reaching the model, `watch`
+  connecting back to the socket, logging `on.turn_end` and dying with the loop, a
+  registered `input` handler that never replies being skipped with a `ui.notify` warning
+  while the turn completes, `ask`'s call as ordinary JSON in the session log,
+  `git-checkpoint` committing after a turn that writes, `input-shortcuts` rewriting `?` and
+  consuming `!`, `todo`'s widget in the manifest and on the wire, and `pi-ext` gone from
+  `cargo metadata`.
 
 `lib/raw.py` is the raw wire client the scripts use for the steps the `pirs` command does
 not expose: it says `hello`, sends each request line from stdin, prints every line the

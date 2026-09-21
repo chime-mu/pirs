@@ -1,0 +1,18 @@
+intent = """
+Keep a todo list for this project in .pirs/todo.md, show it beside the conversation, and
+refresh it whenever the agent touches anything, so I can see the plan change as it works.
+"""
+
+[[widget]]
+key = "todo"
+file = ".pirs/todo.md"
+on = ["start", "tool_result"]
+
+[[prompt]]
+text = """
+This project's todo list lives in `.pirs/todo.md` and is shown to the user beside the
+conversation. Keep it current with the `write` and `edit` tools: add a line when you take
+on a task, mark it done when it is done, and remove what no longer applies. One task per
+line, `- [ ]` for open and `- [x]` for done. Do not report the list back in prose — the
+user is already looking at it.
+"""

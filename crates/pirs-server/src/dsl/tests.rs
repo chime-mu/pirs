@@ -214,7 +214,8 @@ fn a_prompt_entry_has_exactly_one_source() {
 
 #[test]
 fn a_tool_must_define_or_change_something() {
-    assert!(errors(&file("[[tool]]\nname = 't'\n"))[0].contains("needs `run`, `loop`, `disabled` or `wrap`"));
+    assert!(errors(&file("[[tool]]\nname = 't'\n"))[0].contains("needs `run`, `loop`, `params`, `disabled` or `wrap`"));
+    assert!(errors(&file("[[tool]]\nname = 't'\ndescription = 'd'\n"))[0].contains("needs `run`"), "a description alone declares nothing");
     assert!(errors(&file("[[tool]]\nname = 't'\nparams.a = 1\nrun = 'x'\n"))[0].contains("`params.a` must be a table"));
 }
 
@@ -526,6 +527,70 @@ fn a_built_in_is_an_implicit_definition_so_disabling_one_stands_alone() {
     assert!(policy.errors.is_empty(), "{:?}", policy.errors);
     assert_eq!(policy.tools[0].source, ToolSource::Builtin);
     assert!(policy.tools[0].disabled);
+}
+
+#[test]
+fn params_without_run_or_loop_declare_a_tool_a_connected_handler_serves() {
+    let dirs = Dirs::new();
+    dirs.project(
+        "m.pirs.toml",
+        "intent = 'm'\n[[tool]]\nname = 'fetch'\ndescription = 'Fetch a URL'\nparams.url = { type = 'string' }\n\
+         [[tool]]\nname = 'ping'\nparams = {}\n",
+    );
+    let policy = dirs.load();
+    assert!(policy.errors.is_empty(), "{:?}", policy.errors);
+    assert_eq!(policy.tools.len(), 2);
+    assert_eq!(policy.tools[0].source, ToolSource::Handler);
+    assert_eq!(policy.tools[0].description, "Fetch a URL");
+    assert_eq!(policy.tools[0].parameters["required"], json!(["url"]));
+    assert_eq!(policy.tools[1].source, ToolSource::Handler, "`params = {{}}` declares a tool with no arguments");
+    assert!(!policy.tools[1].declares_params());
+    let rendered = render(&policy);
+    assert!(rendered.contains("fetch  handler"), "{rendered}");
+}
+
+#[test]
+fn a_built_in_declared_as_a_handler_tool_is_a_conflict_and_the_built_in_stays() {
+    let dirs = Dirs::new();
+    let m = dirs.project("m.pirs.toml", "intent = 'm'\n[[tool]]\nname = 'bash'\nparams.command = { type = 'string' }\n");
+    let policy = dirs.load();
+    assert!(policy.errors.is_empty(), "{:?}", policy.errors);
+    assert_eq!(policy.conflicts.len(), 1, "{:?}", policy.conflicts);
+    assert!(
+        policy.conflicts[0].message.starts_with("built-in `bash` declared as a handler tool; use `wrap` or `disabled`"),
+        "{:?}",
+        policy.conflicts[0]
+    );
+    assert_eq!(policy.conflicts[0].files, [server(&m)]);
+    assert_eq!(policy.tools[0].source, ToolSource::Builtin, "the built-in is not handed to a registrant");
+    assert_eq!(check_conflicts(&policy).len(), 1, "`pirs check` shows it");
+}
+
+#[test]
+fn timeout_without_run_is_rejected() {
+    let dirs = Dirs::new();
+    let m = dirs.project(
+        "m.pirs.toml",
+        "intent = 'm'\n[[tool]]\nname = 'fetch'\nparams.url = { type = 'string' }\ntimeout = 30\n",
+    );
+    let policy = dirs.load();
+    assert_eq!(policy.errors.len(), 1, "{:?}", policy.errors);
+    assert_eq!(policy.errors[0].0, m);
+    assert!(
+        policy.errors[0].1.contains("`timeout` needs `run`; a declared tool uses its registrant's timeout"),
+        "{:?}",
+        policy.errors[0]
+    );
+    assert!(policy.tools.is_empty());
+}
+
+#[test]
+fn timeout_bounds_a_wrapper_too() {
+    let dirs = Dirs::new();
+    dirs.project("m.pirs.toml", "intent = 'm'\n[[tool]]\nname = 'bash'\nwrap = './sandbox.sh'\ntimeout = 30\n");
+    let policy = dirs.load();
+    assert!(policy.errors.is_empty(), "{:?}", policy.errors);
+    assert_eq!(policy.tools[0].timeout, std::time::Duration::from_secs(30));
 }
 
 #[test]

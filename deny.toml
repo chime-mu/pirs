@@ -44,9 +44,10 @@ reason = "widgets belong to the one UI crate; the client library and the server 
 
 [[bans.deny]]
 crate = "reqwest"
-# `pi-ext` is removed in phase 4, when extensions become DSL policy plus
-# processes; the wrapper entry goes with it and `pi-ai` is left alone.
-wrappers = ["pi-ai", "pi-ext"]
+# One door: the provider crate. The extension host that was the second
+# wrapper was deleted in phase 4, when extensions became DSL policy plus
+# processes (D-22), and its entry went with it.
+wrappers = ["pi-ai"]
 reason = "HTTP is a provider concern; a client, the TUI or the server reaching the network directly is the bug this ban catches"
 
 [[bans.deny]]

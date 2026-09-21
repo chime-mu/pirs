@@ -73,6 +73,10 @@ header = "Recent commits:"
 
 Payload `{ system_prompt }`. Reply `{ append }` or `{ replace }`.
 
+`header` applies to every source: it is the first line of the block, above a `text`, above
+the globbed files, above a shell string's stdout, and above what an executable `{ append }`s.
+A `{ replace }` is the whole prompt and has no block, so no header.
+
 ### `[[tool_result]]` — rewrite what the model reads back from a tool
 
 `tool` (tool name, required) · `run` (required)
@@ -148,7 +152,8 @@ run = "./scripts/handoff.sh $args"
 
 `name` (required) · `description` · `params.<field> = { type, description, default }` ·
 `run` · `timeout` (default 60 s) · `disabled` (bool) · `wrap` (a program the real tool's
-call is routed through) · `loop = { model, prompt, wait }` instead of `run`
+call is routed through) · `loop = { model, prompt, wait }` instead of `run` · `params`
+alone (no `run`, no `loop`) declares a tool a connected process serves
 
 ```toml
 [[tool]]
@@ -172,8 +177,36 @@ disabled = true                        # or wrap = "./tools/sandboxed-bash.sh"
 `params.<name>` is the field's JSON Schema, and takes any JSON-Schema keyword, not only
 `type`, `description` and `default`: `enum`, `minimum`, `pattern`, `items`, `format` and the
 rest are passed to the model as written. A field without a `default` is required.
+`params = {}` declares a tool that takes no arguments.
 
-Payload `{ args, id }`. Reply `{ content, details }` or `{ error }`.
+Payload `{ args, id }`. Reply `{ content, details }` or `{ error }`, where `content` is a
+string or a list of `text`/`image` blocks and `details` is metadata the model never sees.
+
+**What answers the call** depends on `run`:
+
+- `run = "./tools/fetch.py"` — an executable (see "`run` semantics"): it reads the payload on
+  stdin and prints the reply as one JSON line. A non-zero exit is an error result the model
+  reads, with stderr (trimmed) as the message, or `exited with status N` when stderr is
+  empty. A reply that is not one JSON line in the reply shape is an error result too, plus a
+  `ui.notify` warning naming the entry. `timeout` applies.
+- `run = "curl -s $url"` — a shell string: its stdout is the result as text, and a non-zero
+  exit is an error result with stderr as the message. `timeout` applies.
+- **no `run`, no `loop`, but `params`** — a *declaration*: the tool is in the manifest with
+  this description and schema, and a call is sent to the connected client that has
+  `register`ed `tool.<name>` on the loop (`register { loop, slot = "tool.fetch", timeout }`),
+  which answers with the same `{ content, details }` or `{ error }` and within its own
+  registered timeout (D-23). No client registered → the model reads the error
+  ``no handler registered for tool `<name>` ``. This is how a long-lived process started
+  from `[[on]] event = "start"` serves a tool with a real schema: the file declares, the
+  process answers. A registration for a name no file declares still works, with
+  `{ "type": "object" }` as its schema and a description naming the registrant; a
+  registration for a name a file *does* declare takes the file's description and schema. A
+  declaration takes no `timeout` — it is rejected, because the registrant's timeout is what
+  bounds the call. A registration for a name a file gives a `run` or a `loop`, or for a
+  built-in, is refused: the file is the declared intent (D-22), so `wrap` or `disabled` is
+  how a built-in changes hands.
+- `wrap = "./tools/sandboxed-bash.sh"` on a built-in: the same rule decides whether the
+  wrapper is an executable or a shell string, and it receives the built-in's `{ args, id }`.
 
 ## `[settings]`
 
@@ -195,22 +228,54 @@ Every `run` is a *called* process. pirs spawns it in the loop's cwd, writes the 
 as one JSON line on stdin, and reads the reply from stdout. `PIRS_SOCKET`, `PIRS_LOOP`,
 `PIRS_SLOT` and `PIRS_SESSION_DIR` are in the environment.
 
-- **A shell string** (anything that is not a path to an executable) runs under `sh -c`. It
-  additionally gets each top-level payload field as `PIRS_ARG_<field>` and as `$field`
-  interpolation, so a one-liner never parses JSON. Its stdout is the reply, as text.
-  A field larger than 64 KiB — a whole file a `write` tool call carries, say — is **on stdin
-  only**: the kernel refuses an `exec` whose environment and arguments exceed 128 KiB, so
-  such a field is left off `PIRS_ARG_*` and `$field` substitutes the empty string (with a
-  warning in the server's log). Read those from the JSON line, `jq -r .args.text` and such.
-- **A path to an executable** replies with one JSON line on stdout — the same shape as the
-  socket, so the same handler works either way. Testable from a shell:
-  `echo '{"url":"https://x"}' | ./tools/fetch.py`.
-- A non-zero exit is an error; stderr is the message.
-- `timeout` is a `[[tool]]` field only, in seconds, default 60. Every other slot uses the
-  server's fixed 5 s, and `[[on]]` is fire and forget with no timeout at all. On expiry the
-  handler counts as "no opinion" and the loop continues with a warning. The exception is
-  an `[[input]]` with `handled = true`: the input is consumed whatever the process does,
-  because the file said so, and a failure is recorded as the command's output.
+**One rule decides the binding.** A `run` value is an **executable** when it is a single
+token — no whitespace — that names an existing file with the executable bit set, resolved
+against the loop's cwd when relative (`./tools/fetch.py`, `tools/fetch.py`) or taken as given
+when absolute. Everything else is a **shell string**. So `./tools/fetch.py --all`,
+`git log --oneline -5` and `cat` are shell strings, and a script without its `x` bit is
+run by the shell as a command name (and fails as one) rather than as an executable. There
+is no tilde expansion in the test, so `~/bin/hook.sh` is never an executable: it stays a
+shell string, and `sh` is what expands the `~` when it runs it — so such an entry replies as
+text, not as one JSON line. Whitespace is decisive the same way: `./x.sh $args` is a shell
+string, `./x.sh` an executable. The same rule applies to `wrap`.
+
+- **An executable** is spawned directly: no shell, no `$field` interpolation, no
+  `PIRS_ARG_*` — it reads the JSON line. The line is exactly the slot's payload from the
+  table above: `{ text }` for `input`, `{ system_prompt }` for `prompt`,
+  `{ tool, args, result }` for `tool_result`, `{ args, id }` for `tool.<name>`, the event
+  payload for `on.<event>`. It replies with **one JSON line on stdout** in the slot's reply
+  shape — `{ text }` or `{ handled: true }`; `{ append }` or `{ replace }`; `{ result }`;
+  `{ content, details? }` or `{ error }` — the same shapes a connected handler sends over the
+  socket, so the same program works either way. `on.<event>` expects no reply; a
+  `[[status]]` or `[[widget]]` executable prints its value as text. Testable from a shell:
+  `echo '{"args":{"url":"https://x"},"id":"t1"}' | ./tools/fetch.py`.
+- **A shell string** runs under `sh -c`. It additionally gets each top-level payload field
+  as `PIRS_ARG_<field>` and as `$field` interpolation, so a one-liner never parses JSON. Its
+  stdout is the reply, as text: the new input text, the prompt block, the rewritten
+  result, the tool's output. A field larger than 64 KiB — a whole file a `write` tool call
+  carries, say — is **on stdin only**: the kernel refuses an `exec` whose environment and
+  arguments exceed 128 KiB, so such a field is left off `PIRS_ARG_*` and `$field`
+  substitutes the empty string (with a warning in the server's log). Read those from the
+  JSON line, `jq -r .args.text` and such.
+- **Failure.** A non-zero exit is an error with stderr as the message; an executable whose
+  stdout is not one JSON line in the reply shape is an error naming the parse problem. For
+  `input`, `prompt`, `tool_result`, `status` and `widget` an error is "no opinion" — the loop
+  continues with what it had — plus a `ui.notify` warning naming the entry. For a `[[tool]]`
+  it is an error result the model reads. The exception is an `[[input]]` with
+  `handled = true`: the input is consumed whatever the process does, because the file said
+  so, and a failure is recorded as the command's output.
+- `timeout` is a `[[tool]]` field only, in seconds, default 60, and it bounds a process the
+  server spawns: an entry with neither `run` nor `wrap` may not set it. Every other slot uses
+  the server's fixed 5 s, and `[[on]]` is fire and forget with no timeout at all. On expiry the
+  handler counts as "no opinion" and the loop continues with a warning.
+- An executable `[[prompt]] run` is a `prompt` handler: it runs once the base system prompt
+  is assembled (text, files and shell-string entries included), receives it whole as
+  `{ system_prompt }`, and its `{ append }` lands under a `# <file>: [[prompt]] #n` line, or
+  its `{ replace }` replaces the prompt. A shell-string `[[prompt]] run` is a block of the
+  policy section in file order and sees only the section so far.
+- Every process the server spawns belongs to the loop and dies with it: on `loop.close` a
+  called process still running is killed with its whole process group, and so is a called
+  executable whose tool call is aborted with `loop.abort`.
 
 ### Connected processes
 

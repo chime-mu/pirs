@@ -21,15 +21,16 @@
 //!   Writing is done from a background task, so a process that never reads
 //!   stdin cannot block the call, and a broken pipe is not an error.
 //! - **environment** is the server's, plus `PIRS_SOCKET`, `PIRS_LOOP`,
-//!   `PIRS_SLOT`, `PIRS_SESSION_DIR`, one `PIRS_ARG_<field>` per top-level
-//!   payload field, and [`CallEnv::extra`] last (so it can override any of
-//!   them). A field whose name is not a shell identifier, or whose value is
-//!   larger than [`MAX_ENV_VALUE`] (64 KiB), is not exported — it is still on
-//!   stdin. The same cap applies to `$name` interpolation, which substitutes
-//!   the empty string for a value that large and warns: a payload field over
-//!   64 KiB is available **on stdin only**, because the kernel refuses an
-//!   `exec` whose environment or argument strings exceed 128 KiB (`E2BIG`,
-//!   "Argument list too long").
+//!   `PIRS_SLOT`, `PIRS_SESSION_DIR`, and [`CallEnv::extra`] last (so it can
+//!   override any of them). A **shell string** additionally gets one
+//!   `PIRS_ARG_<field>` per top-level payload field (D-24); an **executable**
+//!   does not — it reads the JSON line. A field whose name is not a shell
+//!   identifier, or whose value is larger than [`MAX_ENV_VALUE`] (64 KiB), is
+//!   not exported — it is still on stdin. The same cap applies to `$name`
+//!   interpolation, which substitutes the empty string for a value that
+//!   large and warns: a payload field over 64 KiB is available **on stdin
+//!   only**, because the kernel refuses an `exec` whose environment or
+//!   argument strings exceed 128 KiB (`E2BIG`, "Argument list too long").
 //! - **stdout** is captured in full and returned with a single trailing
 //!   newline stripped (`\n`, and the `\r` before it if any); nothing else is
 //!   trimmed. It is the reply: one JSON line for an executable, plain text for
@@ -43,16 +44,25 @@
 //!   [`CallError::Timeout`]. The deadline covers reading the pipes as well as
 //!   the exit, so a child that exits while a grandchild still holds stdout
 //!   open times out rather than hanging.
+//! - **cancellation** — dropping the [`call`] future, which is what an
+//!   aborted tool call does — kills the whole process group too, not only
+//!   the child `kill_on_drop` would take.
 //!
-//! A shell `run` is `sh -c <interpolated>`; see [`interpolate`] for the
-//! substitution rules and why they are textual.
+//! # Which binding a `run` gets
+//!
+//! [`RunSpec::resolve`] is the one rule: a `run` value that is a single token
+//! (no whitespace) naming an existing file with the executable bit set —
+//! relative to the loop's cwd, or absolute — is an **executable**, spawned
+//! directly with no arguments. Everything else is a **shell string**,
+//! `sh -c <interpolated>`; see [`interpolate`] for the substitution rules and
+//! why they are textual.
 
 #![allow(clippy::disallowed_methods)]
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -117,19 +127,64 @@ pub(crate) enum RunSpec {
     /// A shell string: `sh -c <interpolate(s, vars)>`. Gets `PIRS_ARG_*` and
     /// `$name` interpolation on top of the stdin payload (D-24).
     Shell(String),
-    /// An executable and its arguments: no shell, no interpolation. It still
-    /// gets the JSON line on stdin and the same environment, so the same
-    /// handler works under either binding (D-23).
-    ///
-    /// Phase 4 binds `run = <path to an executable>` to this; until then it
-    /// is constructed only by this module's own tests.
-    #[allow(dead_code)]
+    /// An executable and its arguments: no shell, no interpolation, no
+    /// `PIRS_ARG_*`. It still gets the JSON line on stdin and the four
+    /// `PIRS_*` variables, so the same handler works under either binding
+    /// (D-23).
     Exec {
         /// The program to run.
         program: PathBuf,
         /// Its arguments, passed verbatim.
         args: Vec<String>,
     },
+}
+
+impl RunSpec {
+    /// The binding a `run =` value gets (the one rule, shared with the docs):
+    /// a single token — no whitespace — that, resolved against `cwd` when
+    /// relative or taken as given when absolute, names an existing file with
+    /// the executable bit set is [`RunSpec::Exec`] with no arguments; anything
+    /// else is [`RunSpec::Shell`].
+    ///
+    /// The executable is stored as the resolved path, so a bare `fetch.py`
+    /// in the cwd runs that file and is never looked up on `PATH`.
+    pub(crate) fn resolve(run: &str, cwd: &Path) -> RunSpec {
+        let token = run.trim();
+        if token.is_empty() || token != run || token.chars().any(char::is_whitespace) {
+            return RunSpec::Shell(run.to_owned());
+        }
+        let path = Path::new(token);
+        let candidate = if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) };
+        if is_executable_file(&candidate) {
+            RunSpec::Exec { program: candidate, args: Vec::new() }
+        } else {
+            RunSpec::Shell(run.to_owned())
+        }
+    }
+
+    /// Whether this is the executable binding.
+    pub(crate) fn is_exec(&self) -> bool {
+        matches!(self, RunSpec::Exec { .. })
+    }
+}
+
+/// An existing regular file with any executable bit set.
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 /// What a called process produced.
@@ -422,7 +477,10 @@ fn build(spec: &RunSpec, payload: &Value, vars: &BTreeMap<String, String>, env: 
     cmd.env("PIRS_LOOP", &env.loop_id);
     cmd.env("PIRS_SLOT", &env.slot);
     cmd.env("PIRS_SESSION_DIR", &env.session_dir);
-    if let Some(map) = payload.as_object() {
+    // `PIRS_ARG_*` is the shell string's convenience (D-24); an executable
+    // reads the JSON line and gets none of them.
+    let exported = if spec.is_exec() { None } else { payload.as_object() };
+    if let Some(map) = exported {
         for (key, value) in map {
             if !is_env_name(key) {
                 continue;
@@ -454,6 +512,24 @@ fn build(spec: &RunSpec, payload: &Value, vars: &BTreeMap<String, String>, env: 
     #[cfg(unix)]
     cmd.process_group(0);
     cmd
+}
+
+/// Spawn, retrying briefly on `ETXTBSY`: a script written a moment ago can
+/// still be held open for writing by a child another thread forked while
+/// the write was in flight (the descriptor closes at that child's `exec`).
+/// The agent writing `tools/fetch.py` and calling it in the same turn is
+/// exactly that moment.
+async fn spawn_retrying(cmd: &mut tokio::process::Command) -> std::io::Result<tokio::process::Child> {
+    let mut attempt = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 10 => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// Write the payload line and close stdin, from a task of its own so a process
@@ -554,8 +630,11 @@ pub(crate) async fn call(
 
     let mut cmd = build(spec, payload, &merged, env);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(CallError::Spawn)?;
+    let mut child = spawn_retrying(&mut cmd).await.map_err(CallError::Spawn)?;
     let pid = child.id();
+    // Dropped without completing — the `select!` of an aborted tool call —
+    // this kills the group; completing disarms it.
+    let mut guard = GroupGuard { pid, armed: true };
 
     write_stdin(&mut child, format!("{}\n", payload_line(payload)));
 
@@ -589,6 +668,7 @@ pub(crate) async fn call(
         Ok::<_, std::io::Error>((status, stdout, stderr))
     })
     .await;
+    guard.armed = false;
 
     let (status, stdout, stderr) = match waited {
         Ok(Ok(triple)) => triple,
@@ -626,6 +706,30 @@ pub(crate) async fn call(
     })
 }
 
+/// Kills a called process's group when the [`call`] future is dropped before
+/// it finished: `kill_on_drop` takes the child, this takes what the child
+/// started. Synchronous, because `Drop` is; `kill(1)` is quick.
+struct GroupGuard {
+    pid: Option<u32>,
+    armed: bool,
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(pid) = self.pid {
+            let _ = std_command("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
 /// Start a process and do not wait for it: an `[[on]]` entry, or the `on
 /// start` handler of a long-lived extension (D-16). The payload is written to
 /// its stdin and stdin is closed; its stdout and stderr go to `/dev/null`.
@@ -643,7 +747,7 @@ pub(crate) async fn spawn_detached(
 
     let mut cmd = build(spec, payload, &merged, env);
     cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = cmd.spawn().map_err(CallError::Spawn)?;
+    let mut child = spawn_retrying(&mut cmd).await.map_err(CallError::Spawn)?;
     let pid = child.id();
     write_stdin(&mut child, format!("{}\n", payload_line(payload)));
     Ok(Spawned { child, pid })
@@ -828,6 +932,85 @@ mod tests {
         assert_eq!(interpolate("$text", &v), "from payload");
         v.extend(vars(&[("text", "from caller")]));
         assert_eq!(interpolate("$text", &v), "from caller");
+    }
+
+    // ----- resolve --------------------------------------------------------
+
+    #[test]
+    fn a_single_token_naming_an_executable_file_is_exec_and_everything_else_is_shell() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("tools")).unwrap();
+        let script = dir.path().join("tools/fetch.py");
+        std::fs::write(&script, "#!/bin/sh\ncat\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plain = dir.path().join("notes.txt");
+        std::fs::write(&plain, "x").unwrap();
+
+        let exec = |program: PathBuf| RunSpec::Exec { program, args: vec![] };
+        // Relative to the cwd, and absolute.
+        assert_eq!(RunSpec::resolve("./tools/fetch.py", dir.path()), exec(dir.path().join("./tools/fetch.py")));
+        assert_eq!(RunSpec::resolve("tools/fetch.py", dir.path()), exec(dir.path().join("tools/fetch.py")));
+        assert_eq!(RunSpec::resolve(script.to_str().unwrap(), Path::new("/nowhere")), exec(script.clone()));
+        // Whitespace makes it a shell string even when the first word is the executable.
+        assert_eq!(RunSpec::resolve("./tools/fetch.py --all", dir.path()), shell("./tools/fetch.py --all"));
+        assert_eq!(RunSpec::resolve(" ./tools/fetch.py", dir.path()), shell(" ./tools/fetch.py"));
+        // A file without the bit, a missing file, a command on PATH, a pipeline.
+        assert_eq!(RunSpec::resolve("notes.txt", dir.path()), shell("notes.txt"));
+        assert_eq!(RunSpec::resolve("./tools/missing.py", dir.path()), shell("./tools/missing.py"));
+        assert_eq!(RunSpec::resolve("cat", dir.path()), shell("cat"));
+        assert_eq!(RunSpec::resolve("git log --oneline -5", dir.path()), shell("git log --oneline -5"));
+        assert_eq!(RunSpec::resolve("", dir.path()), shell(""));
+        // A directory is not an executable file.
+        assert_eq!(RunSpec::resolve("tools", dir.path()), shell("tools"));
+    }
+
+    #[tokio::test]
+    async fn an_executable_gets_no_pirs_arg_variables() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("env.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintenv PIRS_ARG_url || echo unset; printenv PIRS_SLOT\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env = CallEnv::new(dir.path().to_path_buf(), "tool.fetch");
+        let spec = RunSpec::resolve("./env.sh", dir.path());
+        assert!(spec.is_exec());
+        let out = call(&spec, &json!({"url": "https://x"}), &no_vars(), &env, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(out.stdout, "unset\ntool.fetch", "no PIRS_ARG_*, the PIRS_* four still there");
+    }
+
+    #[tokio::test]
+    async fn dropping_a_call_kills_the_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pids");
+        let env = CallEnv::new(dir.path().to_path_buf(), "tool.slow");
+        let run = format!("echo $$ >> {p}; sleep 300 & echo $! >> {p}; sleep 300", p = pidfile.display());
+        let payload = json!({});
+        let vars = no_vars();
+        let spec = shell(&run);
+        // Boxed, so `drop(fut)` drops the future itself (a `pin!` would leave
+        // it alive in its hidden local until the end of the scope).
+        let mut fut = Box::pin(call(&spec, &payload, &vars, &env, Duration::from_secs(60)));
+        // Poll it until the script has written both pids, then drop it: that
+        // is what an aborted tool call does to the future.
+        let pids = loop {
+            tokio::select! {
+                _ = fut.as_mut() => panic!("the call finished by itself"),
+                () = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
+            let text = std::fs::read_to_string(&pidfile).unwrap_or_default();
+            let pids: Vec<u32> = text.lines().filter_map(|l| l.trim().parse().ok()).collect();
+            if pids.len() == 2 {
+                break pids;
+            }
+        };
+        assert!(alive(pids[1]).await, "the backgrounded grandchild is running");
+        drop(fut);
+        for (which, pid) in ["leader", "grandchild"].iter().zip(pids) {
+            assert!(!alive(pid).await, "{which} pid {pid} survived the drop");
+        }
     }
 
     // ----- call -----------------------------------------------------------
