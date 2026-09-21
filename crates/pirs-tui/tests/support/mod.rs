@@ -5,6 +5,11 @@
 
 #![allow(dead_code)]
 
+// The paths this file builds are its own temporary directories on this
+// machine, never labels from a server, so D-31's ban on joining does not
+// apply (see `clippy.toml`).
+#![allow(clippy::disallowed_methods)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -62,6 +67,10 @@ pub struct State {
     pub files: HashMap<String, String>,
     /// Ids handed out by `loop.create`.
     pub created: u32,
+    /// When set, `hello` is refused with `VERSION_REFUSED` and this as the
+    /// server's protocol version: a server upgraded under a client that is
+    /// still connected (S21).
+    pub refuse_version: Option<String>,
 }
 
 impl State {
@@ -99,6 +108,9 @@ pub struct FakeServer {
     state: Arc<Mutex<State>>,
     requests: tokio::sync::Mutex<mpsc::UnboundedReceiver<RpcRequest>>,
     events: broadcast::Sender<Envelope>,
+    /// Firing this closes every open connection, which is what a dropped
+    /// SSH link looks like from the client's side.
+    kick: broadcast::Sender<()>,
     _accept: JoinHandle<()>,
 }
 
@@ -110,9 +122,11 @@ impl FakeServer {
         let state = Arc::new(Mutex::new(state));
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (events, _) = broadcast::channel(256);
+        let (kick, _) = broadcast::channel(16);
         let accept = {
             let state = Arc::clone(&state);
             let events = events.clone();
+            let kick = kick.clone();
             tokio::spawn(async move {
                 loop {
                     let Ok((stream, _)) = listener.accept().await else {
@@ -123,6 +137,7 @@ impl FakeServer {
                         Arc::clone(&state),
                         request_tx.clone(),
                         events.subscribe(),
+                        kick.subscribe(),
                     ));
                 }
             })
@@ -133,8 +148,25 @@ impl FakeServer {
             state,
             requests: tokio::sync::Mutex::new(request_rx),
             events,
+            kick,
             _accept: accept,
         }
+    }
+
+    /// Close every open connection, as a dropped link does. The listener
+    /// stays, so a client that reconnects is served again.
+    pub fn drop_connections(&self) {
+        let _ = self.kick.send(());
+    }
+
+    /// Every request recorded so far, taken out of the queue.
+    pub async fn requests_so_far(&self) -> Vec<RpcRequest> {
+        let mut requests = self.requests.lock().await;
+        let mut seen = Vec::new();
+        while let Ok(request) = requests.try_recv() {
+            seen.push(request);
+        }
+        seen
     }
 
     pub fn socket(&self) -> PathBuf {
@@ -189,11 +221,13 @@ async fn serve(
     state: Arc<Mutex<State>>,
     requests: mpsc::UnboundedSender<RpcRequest>,
     mut events: broadcast::Receiver<Envelope>,
+    mut kick: broadcast::Receiver<()>,
 ) {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     loop {
         tokio::select! {
+            _ = kick.recv() => return,
             line = lines.next_line() => {
                 let Ok(Some(line)) = line else { return };
                 let envelope = match Frame::decode(&line) {
@@ -250,16 +284,29 @@ fn answer(state: &Arc<Mutex<State>>, request: &RpcRequest) -> (RpcResponse, Vec<
     };
     let id = &request.id;
     match typed {
-        Request::Hello(_) => (
-            ok(
-                id,
-                HelloResult {
-                    server: "fake-pirs 0.1.0".to_owned(),
-                    protocol_version: PROTOCOL_VERSION.to_owned(),
-                },
+        Request::Hello(_) => match &state.refuse_version {
+            Some(version) => (
+                RpcResponse::err(
+                    id.clone(),
+                    RpcError::new(
+                        code::VERSION_REFUSED,
+                        format!("this server speaks protocol {version}"),
+                    )
+                    .with_data(json!({ "server": version })),
+                ),
+                Vec::new(),
             ),
-            Vec::new(),
-        ),
+            None => (
+                ok(
+                    id,
+                    HelloResult {
+                        server: "fake-pirs 0.1.0".to_owned(),
+                        protocol_version: PROTOCOL_VERSION.to_owned(),
+                    },
+                ),
+                Vec::new(),
+            ),
+        },
         Request::LoopList(_) => (
             ok(
                 id,

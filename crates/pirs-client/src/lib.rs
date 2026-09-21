@@ -7,6 +7,21 @@
 //! streams — the loop events it subscribed to, and the slot requests the
 //! server sends to slots it registered.
 //!
+//! On top of one connection there are three more pieces, for the clients
+//! that need them:
+//!
+//! - [`servers`] reads `~/.pirs/servers.toml`, which names each server and
+//!   the bridge command that reaches it (D-05), and
+//!   [`Transport::Command`] is that bridge: a program whose stdio carries
+//!   the protocol, `ssh build pirs proxy` or `docker exec -i jail pirs
+//!   proxy`. Auto-start is for the local socket and nothing else.
+//! - [`ReconnectingClient`] survives a dropped link: it remembers the
+//!   subscriptions and registrations, re-issues them with `since` set to the
+//!   last `seq` it saw, and keeps one continuous stream across the gap
+//!   (D-06, S19).
+//! - [`Pool`] holds one of those per server, so a loop is `(server, loop)`
+//!   and there is one stream to read (S18, S21).
+//!
 //! The crate speaks nothing but [`pirs_protocol`]. It has no dependency on
 //! `pi-ai` or `pi-agent`, and that absent edge is a test: a client that needs
 //! a type from either means the protocol is missing something, and the fix
@@ -43,12 +58,22 @@
 
 mod client;
 mod error;
+mod pool;
+mod reconnect;
 mod seq;
+mod servers;
 mod socket;
 mod spawn;
+mod transport;
 
-pub use client::{Client, ConnectOptions, EventStream, SlotItem, SlotStream};
+pub use client::{
+    open_server_socket, Client, ConnectOptions, EventStream, SlotItem, SlotStream,
+};
 pub use error::{ClientError, Result};
+pub use pool::{Pool, PoolStream};
+pub use reconnect::{ReconnectingClient, ServerItem, ServerStream};
 pub use seq::SeqTracker;
+pub use servers::{parse_servers, servers, servers_path, ServerConfig, LOCAL};
 pub use socket::{pirs_home, socket_path};
 pub use spawn::{split_command, SERVER_COMMAND_ENV};
+pub use transport::Transport;

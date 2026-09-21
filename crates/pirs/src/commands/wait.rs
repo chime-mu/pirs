@@ -9,18 +9,16 @@
 //! wait ended in — always `idle`, because that is when `loop.wait` answers —
 //! is printed on stdout, so a script can read it too.
 
-use std::path::Path;
-
 use anyhow::Result;
-use pirs_client::Client;
 use pirs_protocol::{LoopInfo, LoopListParams, LoopState};
 
-use crate::connect::{connect_options, resolve_socket};
+use crate::cli::GlobalArgs;
+use crate::connect::{connect_to, resolve_server};
 
 /// Wait for the named loop and print the state it ended in.
-pub(crate) async fn run(target: &str, socket: Option<&Path>, no_start: bool) -> Result<i32> {
-    let socket = resolve_socket(socket);
-    let client = Client::connect(connect_options(&socket, !no_start)).await?;
+pub(crate) async fn run(target: &str, global: &GlobalArgs) -> Result<i32> {
+    let config = resolve_server(global.server.as_deref(), global.socket.as_deref())?;
+    let client = connect_to(&config, !global.no_start).await?;
     let listed = client.loop_list(LoopListParams::default()).await?;
     let Some(info) = resolve(&listed.loops, target) else {
         eprintln!("pirs: no running agent {target:?}");

@@ -21,14 +21,16 @@ use pirs_protocol::{
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
+use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{ClientError, Result};
+use crate::servers::ServerConfig;
 use crate::socket::socket_path;
 use crate::spawn;
+use crate::transport::{Channel, Reader, Transport, Writer};
 
 /// Call a request and unwrap the one [`Response`] variant it can return.
 macro_rules! expect {
@@ -51,6 +53,12 @@ pub struct ConnectOptions {
     /// This client's name and version, free text for the server's logs
     /// (`"pirs-tui 0.1.0"`).
     pub client_name: String,
+    /// A bridge command to talk to instead of a socket, program first: the
+    /// stdio of `ssh build pirs proxy` or `docker exec -i jail pirs proxy`
+    /// (D-05). When it is set, [`socket`](Self::socket) and
+    /// [`auto_start`](Self::auto_start) do not apply: a bridge is the whole
+    /// transport and nothing on this machine is started.
+    pub command: Option<Vec<String>>,
     /// The command that starts a server, program first. `None` means
     /// `PIRS_SERVER_COMMAND` split into words, and failing that this
     /// executable with `serve`.
@@ -67,8 +75,35 @@ impl ConnectOptions {
             socket: None,
             auto_start: true,
             client_name: client_name.into(),
+            command: None,
             server_command: None,
             start_timeout: Duration::from_secs(10),
+        }
+    }
+
+    /// Defaults for a client reaching a server through a bridge command.
+    pub fn bridge(client_name: impl Into<String>, command: Vec<String>) -> Self {
+        ConnectOptions {
+            command: Some(command),
+            ..ConnectOptions::new(client_name)
+        }
+    }
+
+    /// Everything a [`ServerConfig`] says about reaching its server: the
+    /// bridge command, or the socket it names (D-05).
+    pub fn for_server(config: &ServerConfig, client_name: impl Into<String>) -> Self {
+        let mut options = ConnectOptions::new(client_name);
+        options.command = config.command.clone();
+        options.socket = config.socket.clone();
+        options
+    }
+
+    /// Which transport these options name: the bridge command if there is
+    /// one, else the socket, resolved to the default when it is not named.
+    pub fn transport(&self) -> Transport {
+        match &self.command {
+            Some(command) => Transport::Command(command.clone()),
+            None => Transport::Socket(self.socket.clone().unwrap_or_else(socket_path)),
         }
     }
 }
@@ -87,10 +122,17 @@ pub type SlotItem = (Option<Id>, SlotRequest);
 type Pending = Arc<Mutex<HashMap<Id, oneshot::Sender<std::result::Result<Value, RpcError>>>>>;
 
 /// The write half and the one bit of connection state both halves share.
-#[derive(Debug)]
 struct Conn {
-    write: tokio::sync::Mutex<OwnedWriteHalf>,
+    write: tokio::sync::Mutex<Writer>,
     closed: AtomicBool,
+}
+
+impl std::fmt::Debug for Conn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Conn")
+            .field("closed", &self.is_closed())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Conn {
@@ -126,7 +168,10 @@ struct Inner {
     pending: Pending,
     next_id: AtomicI64,
     hello: HelloResult,
-    socket: PathBuf,
+    transport: Transport,
+    /// The bridge process, when the transport is one. Killed on drop, so a
+    /// client that goes away takes its `ssh` with it; `None` for a socket.
+    child: Mutex<Option<Child>>,
     events: Mutex<Option<mpsc::UnboundedReceiver<Event>>>,
     slots: Mutex<Option<mpsc::UnboundedReceiver<SlotItem>>>,
     cancel: CancellationToken,
@@ -135,6 +180,18 @@ struct Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.cancel.cancel();
+        // A bridge is this client's own child and dies with it: `ssh` does
+        // not outlive the UI that spawned it. `kill_on_drop` would do it
+        // when the `Child` goes, a moment later; asking first makes the
+        // order plain.
+        if let Some(child) = self
+            .child
+            .lock()
+            .expect("the child lock is never poisoned")
+            .as_mut()
+        {
+            let _ = child.start_kill();
+        }
     }
 }
 
@@ -175,36 +232,31 @@ impl Client {
     /// `hello` is exchanged; a server whose protocol major differs refuses it
     /// and this returns [`ClientError::VersionRefused`].
     pub async fn connect(options: ConnectOptions) -> Result<Client> {
-        let socket = options.socket.clone().unwrap_or_else(socket_path);
-        let stream = match UnixStream::connect(&socket).await {
-            Ok(stream) => stream,
-            Err(error) if nothing_listening(&error) => {
-                if !options.auto_start {
-                    return Err(ClientError::NoServer {
-                        socket,
-                        source: error,
-                    });
-                }
-                let command = spawn::server_command(
-                    options.server_command.clone(),
-                    options.socket.as_deref(),
-                )?;
-                spawn::spawn_detached(&command)?;
-                wait_for_socket(&socket, options.start_timeout).await?
-            }
-            Err(error) => {
-                return Err(ClientError::Connect {
-                    socket,
-                    source: error,
-                })
-            }
+        let transport = options.transport();
+        let channel = match &transport {
+            Transport::Command(command) => Channel::spawn_bridge(command)?,
+            Transport::Socket(socket) => Channel::from_socket(open_socket(socket, &options).await?),
         };
-        Client::handshake(stream, socket, &options.client_name).await
+        Client::handshake(channel, transport, &options.client_name).await
     }
 
-    /// Say hello on an already-open stream and start the reader task.
-    async fn handshake(stream: UnixStream, socket: PathBuf, client_name: &str) -> Result<Client> {
-        let (read, write) = stream.into_split();
+    /// Connect to the server a [`ServerConfig`] describes (D-05): its bridge
+    /// command, or its socket, which is started when nothing is listening —
+    /// auto-start is a local thing and applies to no bridge.
+    pub async fn connect_server(
+        config: &ServerConfig,
+        client_name: impl Into<String>,
+    ) -> Result<Client> {
+        Client::connect(ConnectOptions::for_server(config, client_name)).await
+    }
+
+    /// Say hello on an already-open channel and start the reader task.
+    async fn handshake(
+        channel: Channel,
+        transport: Transport,
+        client_name: &str,
+    ) -> Result<Client> {
+        let Channel { read, write, child } = channel;
         let conn = Arc::new(Conn {
             write: tokio::sync::Mutex::new(write),
             closed: AtomicBool::new(false),
@@ -265,7 +317,8 @@ impl Client {
                 pending,
                 next_id: AtomicI64::new(1),
                 hello,
-                socket,
+                transport,
+                child: Mutex::new(child),
                 events: Mutex::new(Some(event_rx)),
                 slots: Mutex::new(Some(slot_rx)),
                 cancel,
@@ -278,9 +331,15 @@ impl Client {
         &self.inner.hello
     }
 
-    /// The socket this client is connected to.
-    pub fn socket(&self) -> &Path {
-        &self.inner.socket
+    /// How this client reached its server.
+    pub fn transport(&self) -> &Transport {
+        &self.inner.transport
+    }
+
+    /// The socket this client is connected to, or `None` when it reached its
+    /// server through a bridge command.
+    pub fn socket(&self) -> Option<&Path> {
+        self.inner.transport.socket()
     }
 
     /// Whether the connection is still open. Once false, always false.
@@ -585,6 +644,47 @@ fn version_refused(error: RpcError) -> ClientError {
     }
 }
 
+/// Open the local socket these options name, starting a server first when
+/// nothing is listening and [`auto_start`](ConnectOptions::auto_start)
+/// allows it — the same socket and the same auto-start
+/// [`Client::connect`] would use, without saying `hello` on it.
+///
+/// For the one caller that needs the connection but not the conversation:
+/// `pirs proxy` forwards bytes and speaks no protocol of its own, and over
+/// SSH it is the client's stand-in on that machine, so it starts a missing
+/// server exactly as a local client would.
+///
+/// A bridge command in `options` is ignored: auto-start is a local thing,
+/// and a bridge is the whole transport.
+pub async fn open_server_socket(options: &ConnectOptions) -> Result<UnixStream> {
+    let socket = options.socket.clone().unwrap_or_else(socket_path);
+    open_socket(&socket, options).await
+}
+
+/// Connect to a socket, starting a server first when nothing is listening and
+/// [`auto_start`](ConnectOptions::auto_start) allows it.
+async fn open_socket(socket: &Path, options: &ConnectOptions) -> Result<UnixStream> {
+    match UnixStream::connect(socket).await {
+        Ok(stream) => Ok(stream),
+        Err(error) if nothing_listening(&error) => {
+            if !options.auto_start {
+                return Err(ClientError::NoServer {
+                    socket: socket.to_path_buf(),
+                    source: error,
+                });
+            }
+            let command =
+                spawn::server_command(options.server_command.clone(), options.socket.as_deref())?;
+            spawn::spawn_detached(&command)?;
+            wait_for_socket(socket, options.start_timeout).await
+        }
+        Err(error) => Err(ClientError::Connect {
+            socket: socket.to_path_buf(),
+            source: error,
+        }),
+    }
+}
+
 /// Whether the error means "the socket is not there, or nobody is listening".
 fn nothing_listening(error: &std::io::Error) -> bool {
     matches!(
@@ -651,7 +751,7 @@ async fn send_request(
 /// Own the read half: route responses to their requests, events and slot
 /// requests to their streams, and end everything when the connection does.
 async fn read_loop(
-    read: OwnedReadHalf,
+    read: Reader,
     conn: Arc<Conn>,
     pending: Pending,
     events: mpsc::UnboundedSender<Event>,
@@ -788,6 +888,12 @@ async fn dispatch(
 pub struct EventStream(mpsc::UnboundedReceiver<Event>);
 
 impl EventStream {
+    /// A stream fed by a test rather than by a connection.
+    #[cfg(test)]
+    pub(crate) fn from_receiver(rx: mpsc::UnboundedReceiver<Event>) -> EventStream {
+        EventStream(rx)
+    }
+
     /// The next event, or `None` when the connection has closed.
     pub async fn recv(&mut self) -> Option<Event> {
         self.0.recv().await
@@ -809,6 +915,12 @@ impl Stream for EventStream {
 pub struct SlotStream(mpsc::UnboundedReceiver<SlotItem>);
 
 impl SlotStream {
+    /// A stream fed by a test rather than by a connection.
+    #[cfg(test)]
+    pub(crate) fn from_receiver(rx: mpsc::UnboundedReceiver<SlotItem>) -> SlotStream {
+        SlotStream(rx)
+    }
+
     /// The next slot request, or `None` when the connection has closed.
     pub async fn recv(&mut self) -> Option<SlotItem> {
         self.0.recv().await

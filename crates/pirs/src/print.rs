@@ -21,14 +21,13 @@ use std::io::Write as _;
 
 use anyhow::{bail, Context as _, Result};
 use futures::StreamExt as _;
-use pirs_client::Client;
 use pirs_protocol::{
     ConversationInfo, Delta, Event, LoopCreateParams, LoopListParams, LoopMessageBody, LoopSelector,
     Message, ModelSpec, NotifyLevel, PromptWhen, ServerPath, SubscribeParams,
 };
 
 use crate::cli::{GlobalArgs, RunArgs};
-use crate::connect::{connect_options, resolve_cwd, resolve_socket};
+use crate::connect::{connect_to, resolve_cwd_on, resolve_server};
 
 /// Run one prompt and return the process exit code.
 pub(crate) async fn run(args: RunArgs, global: GlobalArgs) -> Result<i32> {
@@ -36,9 +35,9 @@ pub(crate) async fn run(args: RunArgs, global: GlobalArgs) -> Result<i32> {
     if prompt.trim().is_empty() {
         bail!("no prompt given; try `pirs \"why does the build fail?\"` or `pirs --help`");
     }
-    let cwd = resolve_cwd(global.cwd.as_deref())?;
-    let socket = resolve_socket(global.socket.as_deref());
-    let client = Client::connect(connect_options(&socket, !global.no_start)).await?;
+    let config = resolve_server(global.server.as_deref(), global.socket.as_deref())?;
+    let cwd = resolve_cwd_on(&config, global.cwd.as_deref())?;
+    let client = connect_to(&config, !global.no_start).await?;
 
     let session = match &args.continue_ {
         None => None,

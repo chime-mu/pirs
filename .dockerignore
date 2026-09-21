@@ -1,0 +1,5 @@
+# `COPY . .` in the Dockerfile takes the source and nothing that would only
+# slow the build down or leak a session into the image.
+target
+.git
+*.jsonl

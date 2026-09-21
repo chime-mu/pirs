@@ -40,13 +40,20 @@ pub(crate) async fn run_shell(command: &str, cwd: &Path) -> Result<String, Strin
     Ok(stdout.trim_end().to_owned())
 }
 
-/// Open `$EDITOR` (fallback `vi`) on `path` in a tmux pane beside the UI.
-/// `prefix` is the server's bridge prefix (`ssh build`), empty locally.
-/// Outside tmux there is no pane to ask for (S14).
-pub(crate) async fn open_editor_pane(prefix: &str, path: &str) -> Result<(), String> {
-    if std::env::var_os("TMUX").is_none() {
-        return Err("editor pane needs tmux (S14)".to_owned());
-    }
+/// The program the editor pane is asked for. `tmux` unless
+/// `PIRS_TUI_TMUX` names something else, which is the seam the tests use:
+/// they point it at a program that records its arguments instead of
+/// splitting a window, and it also stands in for being inside tmux.
+const TMUX_ENV: &str = "PIRS_TUI_TMUX";
+
+/// The command a pane runs: the server's prefix, `$EDITOR`, the path.
+///
+/// `prefix` comes from the server's `servers.toml` entry — `ssh build` for
+/// `command = "ssh build pirs proxy"` — so the editor opens over the same
+/// link the agent is reached through, and is empty for a local server
+/// (D-29). The path is the server's own label, quoted for `sh` and never
+/// parsed (D-31).
+pub(crate) fn editor_command(prefix: &str, path: &str) -> String {
     let editor = std::env::var("EDITOR")
         .ok()
         .filter(|e| !e.trim().is_empty())
@@ -59,9 +66,26 @@ pub(crate) async fn open_editor_pane(prefix: &str, path: &str) -> Result<(), Str
     command.push_str(&editor);
     command.push(' ');
     command.push_str(&shell_quote(path));
+    command
+}
+
+/// Open `$EDITOR` (fallback `vi`) on `path` in a tmux pane beside the UI,
+/// and answer with the command line the pane runs.
+///
+/// `prefix` is the server's bridge prefix (`ssh build`), empty locally.
+/// Outside tmux there is no pane to ask for (S14).
+pub(crate) async fn open_editor_pane(prefix: &str, path: &str) -> Result<String, String> {
+    let tmux = std::env::var_os(TMUX_ENV)
+        .map(|program| program.to_string_lossy().into_owned())
+        .filter(|program| !program.trim().is_empty());
+    if tmux.is_none() && std::env::var_os("TMUX").is_none() {
+        return Err("editor pane needs tmux (S14)".to_owned());
+    }
+    let program = tmux.unwrap_or_else(|| "tmux".to_owned());
+    let command = editor_command(prefix, path);
     let status = tokio::time::timeout(
         TIMEOUT,
-        Command::new("tmux")
+        Command::new(&program)
             .args(["split-window", "-h", &command])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -71,9 +95,9 @@ pub(crate) async fn open_editor_pane(prefix: &str, path: &str) -> Result<(), Str
     )
     .await
     .map_err(|_| "tmux did not answer".to_owned())?
-    .map_err(|e| format!("cannot run tmux: {e}"))?;
+    .map_err(|e| format!("cannot run {program}: {e}"))?;
     if status.success() {
-        Ok(())
+        Ok(command)
     } else {
         Err(format!("tmux split-window failed ({status})"))
     }
@@ -179,13 +203,36 @@ mod tests {
     #[tokio::test]
     async fn editor_needs_tmux() {
         // The test runner is not inside tmux, or we would open a pane; the
-        // rule is the same either way, so only assert the message when the
-        // variable is absent.
-        if std::env::var_os("TMUX").is_none() {
+        // rule is the same either way, so only assert the message when
+        // neither the variable nor the seam is set.
+        if std::env::var_os("TMUX").is_none() && std::env::var_os(TMUX_ENV).is_none() {
             assert_eq!(
                 open_editor_pane("", "/tmp/x").await.unwrap_err(),
                 "editor pane needs tmux (S14)"
             );
         }
+    }
+
+    #[test]
+    fn the_pane_runs_the_servers_prefix_then_the_editor() {
+        // `EDITOR` is this process's, so the assertion names it rather than
+        // assuming one.
+        let editor = std::env::var("EDITOR")
+            .ok()
+            .filter(|e| !e.trim().is_empty())
+            .unwrap_or_else(|| "vi".to_owned());
+        assert_eq!(
+            editor_command("ssh build", "/srv/project/src/lib.rs"),
+            format!("ssh build {editor} /srv/project/src/lib.rs")
+        );
+        assert_eq!(
+            editor_command("", "/srv/a b.txt"),
+            format!("{editor} '/srv/a b.txt'")
+        );
+        // A Windows-shaped label is quoted and handed back, never parsed.
+        assert_eq!(
+            editor_command("ssh win", r"C:\work\main.rs"),
+            format!(r"ssh win {editor} 'C:\work\main.rs'")
+        );
     }
 }

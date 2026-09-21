@@ -1,5 +1,9 @@
 //! `~/.pirs/tui.toml`: key bindings, the status format, the theme, UI-side
-//! commands, rendering hooks and per-server settings (D-30, D-32, D-37).
+//! commands and rendering hooks (D-30, D-32, D-37).
+//!
+//! Nothing about a server is in here. Which servers there are, how they are
+//! reached and what goes in front of `$EDITOR` for a file on one is
+//! `~/.pirs/servers.toml`, one place for all of it (D-05, D-29).
 //!
 //! ```toml
 //! theme = "dark"                     # or "light"
@@ -32,10 +36,6 @@
 //! [[render]]                         # draw a tool call or a fenced block with your own program
 //! tool = "ask"                       # or: block = "mermaid"
 //! run = "python3 ~/.pirs/render-ask.py"
-//!
-//! [[server]]
-//! name = "local"
-//! editor_prefix = ""                 # prepended to `$EDITOR <path>` in the editor pane (phase 6)
 //! ```
 //!
 //! A missing file means defaults. A file that does not parse, or names a key
@@ -79,16 +79,6 @@ pub(crate) struct RenderHook {
     #[serde(default)]
     pub block: Option<String>,
     pub run: String,
-}
-
-/// A `[[server]]` entry: per-server UI settings.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ServerConfig {
-    pub name: String,
-    /// Prepended to the editor command in the editor pane; empty locally.
-    #[serde(default)]
-    pub editor_prefix: String,
 }
 
 /// The `[keys]` table: every action and the key bound to it.
@@ -233,8 +223,6 @@ pub(crate) struct Config {
     pub commands: Vec<UiCommand>,
     #[serde(rename = "render")]
     pub renders: Vec<RenderHook>,
-    #[serde(rename = "server")]
-    pub servers: Vec<ServerConfig>,
 }
 
 impl Default for Config {
@@ -245,7 +233,6 @@ impl Default for Config {
             keys: Keys::default(),
             commands: Vec::new(),
             renders: Vec::new(),
-            servers: Vec::new(),
         }
     }
 }
@@ -280,15 +267,6 @@ impl Config {
         self.renders
             .iter()
             .find(|h| h.block.as_deref() == Some(tag))
-    }
-
-    /// The editor prefix configured for a server; empty when none.
-    pub(crate) fn editor_prefix(&self, server: &str) -> &str {
-        self.servers
-            .iter()
-            .find(|s| s.name == server)
-            .map(|s| s.editor_prefix.as_str())
-            .unwrap_or("")
     }
 }
 
@@ -378,9 +356,6 @@ mod tests {
             [[render]]
             block = "mermaid"
             run = "./mermaid.py"
-            [[server]]
-            name = "build"
-            editor_prefix = "ssh build"
         "#;
         let config = Config::parse(text).unwrap();
         assert_eq!(config.theme, Theme::Light);
@@ -389,9 +364,9 @@ mod tests {
             config.render_for_block("mermaid").unwrap().run,
             "./mermaid.py"
         );
-        assert_eq!(config.editor_prefix("build"), "ssh build");
-        assert_eq!(config.editor_prefix("local"), "");
         assert_eq!(config.keys.quit, "ctrl-c");
+        // Server settings are `servers.toml`'s, and this file refuses them.
+        assert!(Config::parse("[[server]]\nname = \"build\"\n").is_err());
     }
 
     #[test]

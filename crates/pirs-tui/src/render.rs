@@ -88,6 +88,15 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect, p: &Palette) {
     let width = inner.width as usize;
     let items = app.sidebar_items();
     let mut lines: Vec<Line> = vec![Line::styled(" agents", p.dim)];
+    // A server whose link is down: its agents are still listed, with
+    // whatever was last known of them, and this says why nothing about them
+    // is moving (D-06, S19).
+    for server in &app.lost {
+        lines.push(Line::styled(
+            fit(&format!(" ! {server} offline"), width),
+            p.error.add_modifier(Modifier::BOLD),
+        ));
+    }
     if app.agents.is_empty() {
         lines.push(Line::styled("   (none)", p.dim));
     }
@@ -103,7 +112,9 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect, p: &Palette) {
         // indent per ancestor in the list (S16).
         let indent = "  ".repeat(app.agent_depth(i));
         let label_width = width.saturating_sub(3 + 1 + state.len() + indent.len());
-        let label = fit(agent.label(), label_width);
+        // `server:id` across several servers (S18); one server draws the
+        // bare label, so a single-server screen is unchanged.
+        let label = fit(&app.agent_label(agent), label_width);
         let text = format!(
             "{cursor}{flag} {indent}{label:<label_width$} {state}",
             label_width = label_width
@@ -126,7 +137,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect, p: &Palette) {
     for (i, conversation) in app.conversations.iter().enumerate() {
         let selected = items.get(app.sidebar) == Some(&SidebarItem::Conversation(i));
         let cursor = if selected { '>' } else { ' ' };
-        let text = format!("{cursor}  {}", conversation.label());
+        let text = format!("{cursor}  {}", app.conversation_label(conversation));
         let style = if selected { p.selected } else { p.dim };
         lines.push(Line::styled(fit(&text, width), style));
     }
@@ -272,6 +283,7 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, p: &Palette) {
         ));
     }
     if let Some(agent) = app.current_agent() {
+        let label = app.agent_label(agent);
         let formatted = crate::status::render(&app.config.status, |key| match key {
             "loop.state" => Some(
                 match agent.state() {
@@ -282,7 +294,7 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, p: &Palette) {
             ),
             other => agent.status.get(other).cloned(),
         });
-        status.push_str(agent.label());
+        status.push_str(&label);
         status.push_str(" · ");
         status.push_str(&formatted);
     }
@@ -312,8 +324,9 @@ fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, p: &Palette) {
         frame.set_cursor_position((x, input_rect.y));
     }
 
-    // Bottom line: a fresh notice, else key hints.
-    let bottom = match &app.notice {
+    // Bottom line: a fresh notice, else one that does not expire (a refused
+    // protocol version), else key hints.
+    let bottom = match app.notice.as_ref().or(app.sticky.as_ref()) {
         Some(notice) => Line::styled(fit(&notice.text, width), p.notify(notice.level)),
         None => {
             let keys = &app.config.keys;
@@ -340,7 +353,7 @@ fn draw_tabs(frame: &mut Frame, app: &App, area: Rect, p: &Palette) {
         let label = match page {
             Page::Agent { key, .. } => app
                 .agent(key)
-                .map(|a| a.label().to_owned())
+                .map(|a| app.agent_label(a))
                 .unwrap_or_else(|| key.loop_id.clone()),
             Page::File { path, .. } => tail(path.as_str(), 24),
         };
@@ -353,7 +366,7 @@ fn draw_tabs(frame: &mut Frame, app: &App, area: Rect, p: &Palette) {
             spans.push(Span::styled(
                 format!(
                     "conversation {} in {} ({} opens it)",
-                    conversation.label(),
+                    app.conversation_label(conversation),
                     conversation.info.cwd,
                     app.config.keys.send
                 ),

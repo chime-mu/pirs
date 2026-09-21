@@ -15,15 +15,29 @@ use nix::unistd::Pid;
 use pirs_client::{Client, ClientError};
 use pirs_protocol::{LoopListParams, LoopState};
 
-use crate::connect::{connect_options, resolve_socket};
+use crate::connect::{connect_options, resolve_server, resolve_socket};
 
 /// How long to wait for the socket to disappear after SIGTERM.
 const GONE: Duration = Duration::from_secs(5);
 
 /// Report the running loops, then stop the server. Always exits 0: a server
 /// that is not there is the state `pirs stop` is asked for.
-pub(crate) async fn run(socket: Option<&Path>) -> Result<i32> {
-    let socket = resolve_socket(socket);
+///
+/// Only a local server can be stopped from here. A server reached through a
+/// bridge command runs somewhere this process has no signal to send —
+/// another machine, a container — and is stopped where it runs (D-05); the
+/// refusal says so rather than stopping the local one by accident.
+pub(crate) async fn run(server: Option<&str>, socket: Option<&Path>) -> Result<i32> {
+    let config = resolve_server(server, socket)?;
+    if config.is_remote() {
+        let command = config.command.as_deref().unwrap_or_default().join(" ");
+        eprintln!(
+            "pirs: {:?} is reached with `command = {command}`; stop it where it runs",
+            config.name
+        );
+        return Ok(1);
+    }
+    let socket = resolve_socket(config.socket.as_deref());
     let client = match Client::connect(connect_options(&socket, false)).await {
         Ok(client) => client,
         // `NoServer` is "nothing is listening there", which is what

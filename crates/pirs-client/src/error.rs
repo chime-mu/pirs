@@ -43,6 +43,32 @@ pub enum ClientError {
         source: std::io::Error,
     },
 
+    /// The bridge command could not be spawned: no such program, or the
+    /// kernel refused it. A bridge that starts and then fails (`ssh: Could
+    /// not resolve hostname`) writes to stderr and closes instead, which is
+    /// [`Disconnected`](Self::Disconnected).
+    #[error("cannot run the bridge command ({}): {source}", command.join(" "))]
+    Bridge {
+        /// The command that was attempted, program first.
+        command: Vec<String>,
+        /// The underlying error.
+        source: std::io::Error,
+    },
+
+    /// A [`Transport::Command`](crate::Transport::Command) with no words in
+    /// it.
+    #[error("the bridge command is empty")]
+    EmptyBridgeCommand,
+
+    /// `~/.pirs/servers.toml` could not be read, or does not parse.
+    #[error("{}: {message}", path.display())]
+    Servers {
+        /// The file that was read.
+        path: PathBuf,
+        /// What is wrong with it, in one line.
+        message: String,
+    },
+
     /// `PIRS_SERVER_COMMAND` was set but empty, or an empty command was passed
     /// in [`ConnectOptions::server_command`].
     ///

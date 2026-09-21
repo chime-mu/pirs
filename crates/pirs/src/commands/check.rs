@@ -8,19 +8,17 @@
 //! are: this stays a thin client and works against a server in a container
 //! whose files the client cannot see.
 
-use std::path::Path;
-
 use anyhow::Result;
-use pirs_client::Client;
 use pirs_protocol::{DslCheckResult, ServerPath};
 
-use crate::connect::{connect_options, resolve_cwd, resolve_socket};
+use crate::cli::GlobalArgs;
+use crate::connect::{connect_to, resolve_cwd_on, resolve_server};
 
 /// Print the merged policy and exit 1 if anything conflicts.
-pub(crate) async fn run(cwd: Option<&Path>, socket: Option<&Path>, no_start: bool) -> Result<i32> {
-    let cwd = resolve_cwd(cwd)?;
-    let socket = resolve_socket(socket);
-    let client = Client::connect(connect_options(&socket, !no_start)).await?;
+pub(crate) async fn run(global: &GlobalArgs) -> Result<i32> {
+    let config = resolve_server(global.server.as_deref(), global.socket.as_deref())?;
+    let cwd = resolve_cwd_on(&config, global.cwd.as_deref())?;
+    let client = connect_to(&config, !global.no_start).await?;
     let result = client.dsl_check(ServerPath::from(cwd)).await?;
     print!("{}", format_check(&result));
     Ok(if result.conflicts.is_empty() { 0 } else { 1 })

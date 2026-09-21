@@ -15,8 +15,8 @@ use tokio::sync::oneshot;
 use crate::keys::Key;
 use crate::process::HookOutput;
 
-/// A loop on a server. One server ("local") in this phase; the type stays so
-/// phase 6 adds servers without a redesign.
+/// A loop on a server: what identifies an agent across every configured
+/// server, because two servers can hand out the same loop id (S18, S21).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct LoopKey {
     pub server: String,
@@ -86,6 +86,8 @@ pub(crate) enum PickAction {
     OpenConversation,
     /// Open the file page for that entry of the agent's jump list.
     OpenFile(LoopKey),
+    /// Start an agent in this directory on the server that was chosen.
+    NewAgentIn { cwd: String },
 }
 
 /// One running agent, as the sidebar and its page see it.
@@ -344,8 +346,21 @@ pub(crate) enum Msg {
         server: String,
         event: Event,
     },
+    /// A server's link dropped. The UI says so and retries with backoff;
+    /// the subscriptions and the place in each loop's log are the
+    /// wrapper's to keep (D-06).
     ServerGone {
         server: String,
+    },
+    /// A server's link is back, its subscriptions re-issued from the last
+    /// `seq` seen. Whatever was missed follows.
+    ServerBack {
+        server: String,
+    },
+    /// Something that must stay on the screen: a server refused this
+    /// client's protocol version, which no retry can fix.
+    Persistent {
+        text: String,
     },
     Listed {
         server: String,

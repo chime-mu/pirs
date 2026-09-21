@@ -1,6 +1,11 @@
 //! The TUI against a fake server, driven through `Harness` and asserted on
 //! `screen()`. Every test is one of the phase 3 acceptance points.
 
+// The paths this file builds are its own temporary directories on this
+// machine, never labels from a server, so D-31's ban on joining does not
+// apply (see `clippy.toml`).
+#![allow(clippy::disallowed_methods)]
+
 mod support;
 
 use std::time::Duration;
@@ -10,6 +15,7 @@ use pirs_protocol::{
     LoopMessageEvent, LoopState, LoopStatusEvent, Manifest, Message, Role, StopReason,
     ToolResultMessage, UserMessage,
 };
+use pirs_client::{split_command, ServerConfig};
 use pirs_tui::{run_headless, Harness, TuiOptions};
 use serde_json::{json, Value};
 use support::{loop_info, FakeServer, State};
@@ -18,15 +24,40 @@ const WAIT: Duration = Duration::from_secs(10);
 const SIZE: (u16, u16) = (100, 30);
 
 fn options(server: &FakeServer, config: Option<&str>) -> TuiOptions {
-    let config_path = server.dir().join("tui.toml");
+    // One server called `local`, named here rather than read from a
+    // `servers.toml` this machine may or may not have.
+    servers(
+        server.dir(),
+        config,
+        vec![ServerConfig {
+            socket: Some(server.socket()),
+            ..ServerConfig::local()
+        }],
+    )
+}
+
+/// The same for any set of servers: the config file lives in `dir`.
+fn servers(dir: &std::path::Path, config: Option<&str>, servers: Vec<ServerConfig>) -> TuiOptions {
+    let config_path = dir.join("tui.toml");
     if let Some(text) = config {
         std::fs::write(&config_path, text).expect("a writable config");
     }
     let mut opts = TuiOptions::new("/srv/project");
-    opts.socket = Some(server.socket());
+    opts.servers = servers;
     opts.config_path = Some(config_path);
     opts.client_name = "pirs-tui test".to_owned();
     opts
+}
+
+/// A server of the pool: a fake on its own socket, under the name the
+/// sidebar writes in front of every one of its loops.
+fn named(name: &str, server: &FakeServer) -> ServerConfig {
+    ServerConfig {
+        name: name.to_owned(),
+        command: None,
+        socket: Some(server.socket()),
+        editor_prefix: None,
+    }
 }
 
 async fn start(server: &FakeServer, config: Option<&str>) -> Harness {
@@ -130,6 +161,15 @@ const ASK_HOOK: &str = r#"
 tool = "ask"
 run = "cat > /dev/null; printf '%s\n' '{\"lines\":[\"Which one?\"],\"options\":[\"alpha option\",\"beta option\"]}'"
 "#;
+
+/// The end of a turn: sequenced, so it is replayed after a reconnect.
+fn turn_end(loop_id: &str, seq: u64) -> Event {
+    Event::LoopTurnEnd(pirs_protocol::LoopTurnEndEvent {
+        loop_id: loop_id.to_owned(),
+        seq,
+        messages: Vec::new(),
+    })
+}
 
 fn delta(loop_id: &str, text: &str) -> Event {
     Event::LoopMessage(LoopMessageEvent {
@@ -680,5 +720,257 @@ async fn a_duplicate_status_event_changes_nothing() {
         flagged(s, "beta")
     })
     .await;
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
+// ---------------------------------------------------------------- phase 6
+
+// (6a) Two servers, one sidebar: every loop is `(server, loop)`, written
+// `server:id`, and a request about one goes to its own server (S18, S21).
+#[tokio::test]
+async fn two_servers_share_one_sidebar_and_each_request_goes_to_its_own() {
+    // The same loop id on both, so only the key can tell them apart.
+    let one = FakeServer::start(State {
+        loops: vec![loop_info("l1", "alpha", LoopState::Idle)],
+        ..State::default()
+    })
+    .await;
+    let two = FakeServer::start(State {
+        loops: vec![loop_info("l1", "beta", LoopState::Idle)],
+        ..State::default()
+    })
+    .await;
+    let harness = Harness::start(
+        servers(one.dir(), None, vec![named("one", &one), named("two", &two)]),
+        SIZE,
+    )
+    .await
+    .expect("the harness starts");
+
+    let screen = wait(&harness, "both servers' loops", |s| {
+        sidebar_row(s, "one:alpha").is_some() && sidebar_row(s, "two:beta").is_some()
+    })
+    .await;
+    assert!(
+        !screen.contains(" alpha ") || screen.contains("one:alpha"),
+        "a loop is named after its server:\n{screen}"
+    );
+
+    // Select the loop on `two` and prompt it: the request must reach that
+    // server and no other, although both have a loop called `l1`.
+    harness.key("down");
+    wait(&harness, "beta's page", |s| {
+        sidebar_row(s, "two:beta").is_some_and(|r| r.starts_with('>'))
+    })
+    .await;
+    two.next_request_where("attach l1 on two", |r| {
+        r.method == "loop.attach" && r.params["loop"] == "l1"
+    })
+    .await;
+    harness.text("only for two");
+    harness.key("enter");
+    let prompt = two
+        .next_request_where("loop.prompt on two", |r| r.method == "loop.prompt")
+        .await;
+    assert_eq!(prompt.params["text"], json!("only for two"));
+    assert_eq!(prompt.params["loop"], json!("l1"));
+
+    let on_one = one.requests_so_far().await;
+    assert!(
+        on_one.iter().all(|r| r.method != "loop.prompt"),
+        "server one saw a prompt meant for two: {:?}",
+        on_one.iter().map(|r| r.method.clone()).collect::<Vec<_>>()
+    );
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
+// (6b) A dropped link: a notice, a reconnect with backoff, and the events
+// missed while away replayed exactly once (D-06, S19).
+#[tokio::test]
+async fn a_dropped_link_reconnects_and_replays_what_was_missed() {
+    let mut state = two_loops();
+    state.replay.insert(
+        "l1".to_owned(),
+        vec![user("l1", 1, "hello there"), turn_end("l1", 2)],
+    );
+    let server = FakeServer::start(state).await;
+    let harness = start(&server, None).await;
+    wait(&harness, "the first replay", |s| s.contains("hello there")).await;
+
+    // The turn that happens while the link is down: it is in the log, so a
+    // subscription resuming from seq 2 replays it.
+    server.state().replay.insert(
+        "l1".to_owned(),
+        vec![
+            user("l1", 1, "hello there"),
+            turn_end("l1", 2),
+            assistant("l1", 3, vec![Content::text("MISSED ANSWER")]),
+            turn_end("l1", 4),
+        ],
+    );
+    server.drop_connections();
+
+    wait(&harness, "the disconnected notice", |s| {
+        s.contains("disconnected; reconnecting")
+    })
+    .await;
+    wait(&harness, "the offline marker", |s| s.contains("! local offline")).await;
+
+    let screen = wait(&harness, "the missed turn", |s| s.contains("MISSED ANSWER")).await;
+    assert!(
+        !screen.contains("! local offline"),
+        "the marker goes when the link is back:\n{screen}"
+    );
+    assert_eq!(
+        screen.matches("MISSED ANSWER").count(),
+        1,
+        "the replay arrives once:\n{screen}"
+    );
+    // And the resumed subscription asked for exactly what it was missing.
+    let resumed = server
+        .next_request_where("the resumed subscribe", |r| {
+            r.method == "subscribe" && r.params["loop"] == "l1" && r.params["since"] == json!(2)
+        })
+        .await;
+    assert_eq!(resumed.params["since"], json!(2));
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
+// (6c) A server that refuses this client's protocol version on reconnect:
+// a notice that stays, and no further attempt (S21).
+#[tokio::test]
+async fn a_refused_version_on_reconnect_is_a_notice_that_stays() {
+    let server = FakeServer::start(two_loops()).await;
+    // Wide enough for the whole message: it has to name both versions.
+    let harness = Harness::start(options(&server, None), (140, 30))
+        .await
+        .expect("the harness starts");
+    wait(&harness, "the sidebar", |s| sidebar_row(s, "alpha").is_some()).await;
+
+    server.state().refuse_version = Some("1.0".to_owned());
+    server.drop_connections();
+
+    let refused = wait(&harness, "the refusal", |s| {
+        s.contains("it speaks protocol 1.0")
+    })
+    .await;
+    assert!(
+        refused.contains("this client speaks 0.1"),
+        "the notice names both versions:\n{refused}"
+    );
+    // Long enough for an ordinary notice to have expired, and for four
+    // more attempts had any been made.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let screen = harness.screen().await;
+    assert!(
+        screen.contains("speaks protocol 1.0"),
+        "a refused version does not fade away:\n{screen}"
+    );
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
+// (6d) The editor pane runs the server's own prefix in front of `$EDITOR`
+// (D-29). `PIRS_TUI_TMUX` is the seam: it stands in for tmux and records
+// nothing, so what is asserted is the command line the UI built.
+#[tokio::test]
+async fn the_editor_pane_uses_the_servers_prefix() {
+    // The prefix the bridge command derives to; the derivation itself is
+    // `pirs-client`'s own test.
+    let bridge = ServerConfig {
+        name: "build".to_owned(),
+        command: Some(split_command("ssh build pirs proxy")),
+        socket: None,
+        editor_prefix: None,
+    };
+    assert_eq!(bridge.editor_prefix(), "ssh build");
+
+    let mut state = two_loops();
+    state
+        .files
+        .insert("/srv/project/src/lib.rs".to_owned(), "fn one() {}\n".to_owned());
+    state.replay.insert(
+        "l1".to_owned(),
+        vec![changed("l1", 1, "/srv/project/src/lib.rs")],
+    );
+    let server = FakeServer::start(state).await;
+    // A fake speaks over a socket, so the config carries the derived prefix
+    // rather than the bridge command that produced it.
+    let config = ServerConfig {
+        name: "build".to_owned(),
+        command: None,
+        socket: Some(server.socket()),
+        editor_prefix: Some(bridge.editor_prefix()),
+    };
+    // Only this test opens an editor pane, so the two variables it needs
+    // are set here rather than around the whole binary.
+    std::env::set_var("EDITOR", "vi");
+    std::env::set_var("PIRS_TUI_TMUX", "true");
+    let harness = Harness::start(servers(server.dir(), None, vec![config]), SIZE)
+        .await
+        .expect("the harness starts");
+
+    wait(&harness, "the jump list", |s| s.contains("files: 1 ")).await;
+    harness.key("1");
+    wait(&harness, "the file page", |s| s.contains("fn one()")).await;
+    harness.key("/");
+    harness.text("edit");
+    harness.key("enter");
+    let screen = wait(&harness, "the editor pane", |s| s.contains("editor pane:")).await;
+    assert!(
+        screen.contains("ssh build vi /srv/project/src/lib.rs"),
+        "the pane runs the server's prefix in front of the editor:\n{screen}"
+    );
+    std::env::remove_var("PIRS_TUI_TMUX");
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
+// (6e) `/new` asks for a directory and then, because there is more than one
+// server, which one runs the agent (S18).
+#[tokio::test]
+async fn new_asks_which_server_runs_the_agent() {
+    let one = FakeServer::start(State {
+        loops: vec![loop_info("l1", "alpha", LoopState::Idle)],
+        ..State::default()
+    })
+    .await;
+    let two = FakeServer::start(State::default()).await;
+    let harness = Harness::start(
+        servers(one.dir(), None, vec![named("one", &one), named("two", &two)]),
+        SIZE,
+    )
+    .await
+    .expect("the harness starts");
+    wait(&harness, "the sidebar", |s| {
+        sidebar_row(s, "one:alpha").is_some()
+    })
+    .await;
+
+    harness.key("/");
+    harness.text("new");
+    harness.key("enter");
+    wait(&harness, "the directory question", |s| s.contains("directory")).await;
+    harness.key("ctrl-u");
+    harness.text("/srv/other");
+    harness.key("enter");
+    let screen = wait(&harness, "the server question", |s| {
+        s.contains("which server runs the agent in /srv/other?")
+    })
+    .await;
+    assert!(
+        screen.contains("> one") && screen.contains("two"),
+        "both servers are offered, the selected agent's first:\n{screen}"
+    );
+
+    harness.key("down");
+    harness.key("enter");
+    let created = two
+        .next_request_where("loop.create on two", |r| r.method == "loop.create")
+        .await;
+    assert_eq!(created.params["cwd"], json!("/srv/other"));
+    let on_one = one.requests_so_far().await;
+    assert!(
+        on_one.iter().all(|r| r.method != "loop.create"),
+        "the agent was started on the server that was chosen"
+    );
     assert_eq!(harness.quit().await.unwrap(), 0);
 }

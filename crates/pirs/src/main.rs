@@ -5,6 +5,8 @@
 //! - print mode (`pirs "prompt"`) — [`print`], the whole of S1 and S2;
 //! - `pirs serve` — the loop server in this process, and what a client
 //!   auto-starts;
+//! - `pirs proxy` — the bridge a remote or contained server is reached
+//!   through;
 //! - `pirs stop`, `pirs --list`, `pirs check` and `pirs wait` — the small
 //!   administrative commands;
 //! - `pirs tui` — the reference UI, a client of the server like any other.
@@ -43,26 +45,18 @@ async fn dispatch(cli: Cli) -> i32 {
     let global = cli.global;
     let result = match cli.command {
         Some(Command::Serve { idle }) => commands::serve::run(idle, global.socket.as_deref()).await,
-        Some(Command::Stop) => commands::stop::run(global.socket.as_deref()).await,
-        Some(Command::Check) => {
-            commands::check::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
+        Some(Command::Proxy) => {
+            commands::proxy::run(global.socket.as_deref(), global.no_start).await
         }
-        Some(Command::Wait { target }) => {
-            commands::wait::run(&target, global.socket.as_deref(), global.no_start).await
+        Some(Command::Stop) => {
+            commands::stop::run(global.server.as_deref(), global.socket.as_deref()).await
         }
+        Some(Command::Check) => commands::check::run(&global).await,
+        Some(Command::Wait { target }) => commands::wait::run(&target, &global).await,
         Some(Command::Tui { headless, config }) => {
-            commands::tui::run(
-                headless,
-                config,
-                global.cwd.as_deref(),
-                global.socket.as_deref(),
-                global.no_start,
-            )
-            .await
+            commands::tui::run(headless, config, &global).await
         }
-        None if cli.run.list => {
-            commands::list::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
-        }
+        None if cli.run.list => commands::list::run(&global).await,
         None => print::run(cli.run, global).await,
     };
     match result {

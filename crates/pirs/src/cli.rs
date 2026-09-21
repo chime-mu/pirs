@@ -28,7 +28,8 @@ use pirs_protocol::ThinkingLevel;
     subcommand_negates_reqs = true
 )]
 pub(crate) struct Cli {
-    /// `serve`, `stop`, `check`, `wait` or `tui`; absent means print mode.
+    /// `serve`, `proxy`, `stop`, `check`, `wait` or `tui`; absent means
+    /// print mode.
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 
@@ -50,7 +51,12 @@ pub(crate) struct GlobalArgs {
     #[arg(long, global = true, value_name = "DIR")]
     pub(crate) cwd: Option<PathBuf>,
 
-    /// The server's unix socket; overrides `PIRS_SOCKET`.
+    /// The server to work on, by the name `~/.pirs/servers.toml` gives it
+    /// (default: `local`). `--list` without it lists every server.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub(crate) server: Option<String>,
+
+    /// The local server's unix socket; overrides `PIRS_SOCKET`.
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) socket: Option<PathBuf>,
 
@@ -109,7 +115,23 @@ pub(crate) enum Command {
         idle: u64,
     },
 
+    /// Forward protocol lines between stdin/stdout and the server's socket.
+    ///
+    /// The bridge a remote or contained server is reached through (D-05,
+    /// D-36): `ssh build pirs proxy` on the other machine,
+    /// `docker exec -i jail pirs proxy` into a container. It parses nothing
+    /// but the line endings, opens no port, and knows nothing about loops.
+    /// A server that is not running is started, because that is what every
+    /// client does with a missing server and the bridge is the client's
+    /// stand-in on that machine; `--no-start` fails instead.
+    ///
+    /// Exits 0 when either side closes, 1 when the socket cannot be reached.
+    Proxy,
+
     /// Close the running agents and stop the server.
+    ///
+    /// Only a local server: a server reached through a bridge command is
+    /// stopped where it runs.
     Stop,
 
     /// Print the policy a loop in this directory would start with.
@@ -135,7 +157,10 @@ pub(crate) enum Command {
     ///
     /// A client like any other: it talks to the loop server over the socket
     /// and starts one if none is listening. `--cwd` is the directory whose
-    /// conversations the sidebar lists.
+    /// conversations the sidebar lists. The sidebar spans every server
+    /// `~/.pirs/servers.toml` names (D-05), each agent shown `server:id`;
+    /// `--server <name>` narrows it to one and `--socket` overrides the
+    /// local one.
     Tui {
         /// Drive the UI from a script instead of a terminal, on a screen
         /// this many columns by rows (`100x30`).
@@ -274,6 +299,52 @@ mod tests {
         let cli = parse(&["pirs", "stop", "--socket", "/tmp/s"]);
         assert!(matches!(cli.command, Some(Command::Stop)), "{:?}", cli.command);
         assert_eq!(cli.global.socket, Some(PathBuf::from("/tmp/s")));
+    }
+
+    #[test]
+    fn proxy_takes_a_socket_and_nothing_else() {
+        let cli = parse(&["pirs", "proxy"]);
+        assert!(matches!(cli.command, Some(Command::Proxy)), "{:?}", cli.command);
+        assert!(cli.global.socket.is_none());
+        let cli = parse(&["pirs", "proxy", "--socket", "/run/pirs.sock"]);
+        assert!(matches!(cli.command, Some(Command::Proxy)), "{:?}", cli.command);
+        assert_eq!(cli.global.socket, Some(PathBuf::from("/run/pirs.sock")));
+        // A bridge has no prompt and no options of its own.
+        let no_start = parse(&["pirs", "proxy", "--no-start"]);
+        assert!(matches!(no_start.command, Some(Command::Proxy)), "{:?}", no_start.command);
+        assert!(no_start.global.no_start);
+        assert!(Cli::try_parse_from(["pirs", "proxy", "hi"]).is_err());
+        assert!(Cli::try_parse_from(["pirs", "proxy", "--listen", "8080"]).is_err());
+        // And a prompt that starts with the word is still a prompt.
+        let prompt = parse(&["pirs", "proxy the request"]);
+        assert!(prompt.command.is_none(), "{:?}", prompt.command);
+    }
+
+    #[test]
+    fn server_names_which_server_and_defaults_to_none() {
+        assert_eq!(parse(&["pirs", "hi"]).global.server, None);
+        let cli = parse(&["pirs", "--server", "two", "hi"]);
+        assert_eq!(cli.global.server.as_deref(), Some("two"));
+        assert_eq!(cli.run.prompt, ["hi"]);
+        // It is global: it comes on either side of a subcommand.
+        for args in [
+            ["pirs", "--server", "build", "stop"],
+            ["pirs", "stop", "--server", "build"],
+        ] {
+            let cli = parse(&args);
+            assert!(matches!(cli.command, Some(Command::Stop)), "{:?}", cli.command);
+            assert_eq!(cli.global.server.as_deref(), Some("build"));
+        }
+        let cli = parse(&["pirs", "--list", "--server", "build"]);
+        assert!(cli.run.list);
+        assert_eq!(cli.global.server.as_deref(), Some("build"));
+        let cli = parse(&["pirs", "wait", "a7f3", "--server", "build"]);
+        assert_eq!(cli.global.server.as_deref(), Some("build"));
+        let cli = parse(&["pirs", "check", "--server", "build"]);
+        assert!(matches!(cli.command, Some(Command::Check)), "{:?}", cli.command);
+        assert_eq!(cli.global.server.as_deref(), Some("build"));
+        // It takes a name.
+        assert!(Cli::try_parse_from(["pirs", "--server"]).is_err());
     }
 
     #[test]

@@ -39,6 +39,17 @@ Every line is one of three shapes:
 sender and echoed back. Protocol message fields are `snake_case`; conversation messages and
 their content blocks are `camelCase`, because that is the session-log format.
 
+## Bridges
+
+A *bridge* is a program that forwards these lines between some other transport and the
+server's socket, in both directions, and does nothing else: it parses no message, holds no
+state, and knows nothing about loops, so it needs no change when the protocol grows.
+`pirs proxy` is the one in this repository — `ssh build pirs proxy` for another machine,
+`docker exec -i jail pirs proxy` for a container — and `~/.pirs/servers.toml` names it as
+a server's `command` (D-05). The loop server itself never listens on the network; a bridge
+that does open a port is a separate component the user chooses to run, and it owns its own
+authentication (D-36).
+
 ## Two roles
 
 A connection may be either, both, or neither.

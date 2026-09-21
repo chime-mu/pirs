@@ -1,0 +1,14 @@
+# D-31: every path in a protocol message is a label produced by the server
+# that runs the loop, and is only ever handed back to that server. It may
+# name a file on a machine this client cannot see, under a path syntax it
+# does not use, so joining, splitting or normalising one is always wrong.
+#
+# Local files the UI owns — `tui.toml` — are the exception, and each call
+# site says so with
+# `#[allow(clippy::disallowed_methods)]` and the name of the file it builds.
+disallowed-methods = [
+    { path = "std::path::Path::join", reason = "a path from a server is opaque (D-31); allow the call only for a local file of ours and name it in the comment" },
+    { path = "std::path::PathBuf::push", reason = "a path from a server is opaque (D-31); allow the call only for a local file of ours and name it in the comment" },
+    { path = "std::path::Path::components", reason = "a path from a server is opaque (D-31): its syntax may not be this machine's" },
+    { path = "std::path::Path::parent", reason = "a path from a server is opaque (D-31): its syntax may not be this machine's" },
+]

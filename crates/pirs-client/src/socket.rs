@@ -24,6 +24,9 @@ pub fn pirs_home() -> PathBuf {
     }
     let home: Option<OsString> = dirs::home_dir().map(PathBuf::into_os_string);
     match home {
+        // `~/.pirs`, a local directory of ours, not a path from a server
+        // (D-31).
+        #[allow(clippy::disallowed_methods)]
         Some(home) if !home.is_empty() => PathBuf::from(home).join(".pirs"),
         _ => PathBuf::from(".pirs"),
     }
@@ -43,7 +46,11 @@ pub fn socket_path() -> PathBuf {
         return socket;
     }
     if let Some(runtime) = env_path("XDG_RUNTIME_DIR") {
+        // The local socket file, not a path from a server (D-31).
+        #[allow(clippy::disallowed_methods)]
         return runtime.join(SOCKET_NAME);
     }
+    // The local socket file, not a path from a server (D-31).
+    #[allow(clippy::disallowed_methods)]
     pirs_home().join(SOCKET_NAME)
 }

@@ -39,6 +39,18 @@ phase passes; every check prints one line.
   of a run the child spends two seconds on and then printing `idle` (and exiting 1 for an
   agent that does not exist), and `loop.close` on the parent taking the child with it.
 
+- `phase-6.sh` — remote and contained servers (S18–S21): two real servers on two temporary
+  sockets, `two` reached through the bridge `pirs proxy --socket <sock2>` that a
+  `servers.toml` `command =` spawns, each server with its own `PIRS_HOME` so that where a
+  conversation lands says which server ran it — `pirs --server two "hi"` answering from
+  two and storing there, the TUI harness listing loops from both as `one:<id>` and
+  `two:<id>`, the bridge killed under an attached UI and the turn it missed replayed onto
+  the page when the UI reconnects (the reconnect re-spawns the bridge, so that *is*
+  restarting it), a fake server from another release (`fixtures/phase-6/fake-server.py`)
+  refusing `hello` with a message naming both protocol versions, the `disallowed-methods`
+  bans and a clean `cargo clippy -p pirs-client -p pirs-tui` for paths staying opaque
+  (D-31), and the Docker path documented rather than run.
+
 `lib/raw.py` is the raw wire client the scripts use for the steps the `pirs` command does
 not expose: it says `hello`, sends each request line from stdin, prints every line the
 server sends back, and can stand in for a registered handler (`--reply tool.x=file`).

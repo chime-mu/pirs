@@ -24,7 +24,7 @@ impl TempDir {
     pub fn new(tag: &str) -> TempDir {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let path = std::env::temp_dir().join(format!(
-            "pirs-client-{}-{tag}-{}",
+            "pirs-bin-{}-{tag}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));

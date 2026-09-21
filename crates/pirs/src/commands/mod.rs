@@ -2,6 +2,7 @@
 
 pub(crate) mod check;
 pub(crate) mod list;
+pub(crate) mod proxy;
 pub(crate) mod serve;
 pub(crate) mod stop;
 pub(crate) mod tui;

@@ -1707,10 +1707,12 @@ dependencies = [
  "dirs",
  "futures",
  "pirs-protocol",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
 ]
 

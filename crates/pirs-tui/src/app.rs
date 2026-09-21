@@ -4,10 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pirs_client::Client;
+use pirs_client::{Client, Pool, ReconnectingClient};
 use pirs_protocol::{
     Content, Delta, Event, LoopCreateParams, LoopListParams, LoopMessageBody, LoopMessageEvent,
     LoopSelector, LoopState, LoopStatusEvent, Message, NotifyLevel, PromptWhen, Ref, ServerPath,
@@ -30,34 +30,131 @@ pub(crate) const NOTICE_TTL: Duration = Duration::from_secs(5);
 /// Lines of a tool result shown when collapsed.
 pub(crate) const RESULT_PREVIEW_LINES: usize = 4;
 
-/// The request side: every server connection and the channel results come
-/// back on. Cheap to clone; every request runs in its own task.
+/// The request side: the pool of server connections and the channel results
+/// come back on. Cheap to clone; every request runs in its own task.
+///
+/// A loop is `(server, loop)` and every request about it goes to that
+/// server's connection (S18, S21). A server whose link is down has no
+/// client, and a request for it is dropped or reported rather than waited
+/// on: the UI never blocks on a machine that is not there.
 #[derive(Clone)]
 pub(crate) struct Io {
-    servers: Arc<BTreeMap<String, Client>>,
+    pool: Arc<Pool>,
     tx: mpsc::UnboundedSender<Msg>,
     cwd: PathBuf,
+    /// Servers with a backoff task already running, so a second one is not
+    /// started for a link that is already being waited on.
+    reconnecting: Arc<Mutex<BTreeSet<String>>>,
 }
 
+/// How long to wait before each attempt at a dropped link, the last one
+/// repeating for as long as the UI is open (D-06, S19).
+pub(crate) const BACKOFF_MS: [u64; 5] = [500, 1_000, 2_000, 4_000, 5_000];
+
 impl Io {
-    pub(crate) fn new(
-        servers: BTreeMap<String, Client>,
-        tx: mpsc::UnboundedSender<Msg>,
-        cwd: PathBuf,
-    ) -> Io {
+    pub(crate) fn new(pool: Pool, tx: mpsc::UnboundedSender<Msg>, cwd: PathBuf) -> Io {
         Io {
-            servers: Arc::new(servers),
+            pool: Arc::new(pool),
             tx,
             cwd,
+            reconnecting: Arc::new(Mutex::new(BTreeSet::new())),
         }
     }
 
+    /// The servers, in the order the configuration lists them.
     pub(crate) fn server_names(&self) -> Vec<String> {
-        self.servers.keys().cloned().collect()
+        self.pool
+            .servers()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Which servers are connected right now, for the start-up marker.
+    pub(crate) fn disconnected(&self) -> Vec<String> {
+        self.pool
+            .clients()
+            .into_iter()
+            .filter(|client| !client.is_connected())
+            .map(|client| client.server().to_owned())
+            .collect()
+    }
+
+    /// What to put in front of `$EDITOR <path>` for a file on this server:
+    /// the bridge command without its `pirs proxy`, or an explicit
+    /// `editor_prefix` in `servers.toml` (D-29). One place for server
+    /// configuration, so the UI's own file has none.
+    pub(crate) fn editor_prefix(&self, server: &str) -> String {
+        self.pool
+            .config(server)
+            .map(pirs_client::ServerConfig::editor_prefix)
+            .unwrap_or_default()
+    }
+
+    fn connection(&self, server: &str) -> Option<Arc<ReconnectingClient>> {
+        self.pool.client(server)
     }
 
     fn client(&self, server: &str) -> Option<Client> {
-        self.servers.get(server).cloned()
+        self.connection(server).and_then(|client| client.client())
+    }
+
+    /// Keep trying to reopen a dropped link, without blocking the UI.
+    ///
+    /// The wrapper announces the recovery itself — its stream carries
+    /// `Reconnected` and then whatever was missed — so this task's only job
+    /// is the timing, and it ends the moment the link is back. A refused
+    /// version cannot be waited out: it is a notice that stays, and no
+    /// further attempt (S19, S21).
+    ///
+    /// One task per server. A dropped link can be heard from more than one
+    /// place — the wrapper's stream, a request that failed, the start-up
+    /// check — and a second task would only race the first into the same
+    /// connection.
+    pub(crate) fn reconnect(&self, server: &str) {
+        let Some(client) = self.connection(server) else {
+            return;
+        };
+        if !self
+            .reconnecting
+            .lock()
+            .expect("the reconnect lock is never poisoned")
+            .insert(server.to_owned())
+        {
+            return;
+        }
+        let tx = self.tx.clone();
+        let reconnecting = Arc::clone(&self.reconnecting);
+        let server = server.to_owned();
+        tokio::spawn(async move {
+            async {
+                let delays = BACKOFF_MS
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat(BACKOFF_MS[BACKOFF_MS.len() - 1]));
+                for delay in delays {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    if tx.is_closed() {
+                        return;
+                    }
+                    match client.reconnect().await {
+                        Ok(()) => return,
+                        Err(error @ pirs_client::ClientError::VersionRefused { .. }) => {
+                            let _ = tx.send(Msg::Persistent {
+                                text: format!("server `{server}`: {error}"),
+                            });
+                            return;
+                        }
+                        Err(_) => continue,
+                    }
+                }
+            }
+            .await;
+            reconnecting
+                .lock()
+                .expect("the reconnect lock is never poisoned")
+                .remove(&server);
+        });
     }
 
     /// Run a request whose only interesting outcome is failure.
@@ -73,15 +170,17 @@ impl Io {
         });
     }
 
+    /// Subscribe to every loop's `loop.status`, and keep that subscription
+    /// across a reconnect (it goes through the wrapper, not the raw
+    /// connection, which is what makes it survive).
     pub(crate) fn subscribe_status(&self, server: &str) {
-        let Some(client) = self.client(server) else {
+        let Some(client) = self.connection(server) else {
             return;
         };
         self.fire(format!("subscribe * on {server}"), async move {
             client
-                .subscribe_with_replay(LoopSelector::All, Some(vec!["loop.status".into()]), None)
+                .subscribe(LoopSelector::All, Some(vec!["loop.status".into()]), None)
                 .await
-                .map(|_| ())
                 .map_err(|e| e.to_string())
         });
     }
@@ -102,10 +201,17 @@ impl Io {
     }
 
     pub(crate) fn attach(&self, key: LoopKey) {
+        let tx = self.tx.clone();
         let Some(client) = self.client(&key.server) else {
+            // Say so rather than leaving the agent attaching for ever: the
+            // link is down, and selecting it again once it is back must
+            // attach again.
+            let _ = tx.send(Msg::Attached {
+                key,
+                result: Err("the server is not connected".to_owned()),
+            });
             return;
         };
-        let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = client
                 .loop_attach(&key.loop_id)
@@ -116,27 +222,25 @@ impl Io {
     }
 
     pub(crate) fn subscribe(&self, key: LoopKey, since: u64) {
-        let Some(client) = self.client(&key.server) else {
+        let Some(client) = self.connection(&key.server) else {
             return;
         };
         self.fire(format!("subscribe {}", key.loop_id), async move {
             client
-                .subscribe_with_replay(LoopSelector::Loop(key.loop_id), None, Some(since))
+                .subscribe(LoopSelector::Loop(key.loop_id), None, Some(since))
                 .await
-                .map(|_| ())
                 .map_err(|e| e.to_string())
         });
     }
 
     pub(crate) fn unsubscribe(&self, key: LoopKey) {
-        let Some(client) = self.client(&key.server) else {
+        let Some(client) = self.connection(&key.server) else {
             return;
         };
         self.fire(format!("unsubscribe {}", key.loop_id), async move {
             client
                 .unsubscribe(LoopSelector::Loop(key.loop_id))
                 .await
-                .map(|_| ())
                 .map_err(|e| e.to_string())
         });
     }
@@ -181,11 +285,15 @@ impl Io {
     }
 
     pub(crate) fn create(&self, server: &str, params: LoopCreateParams) {
-        let Some(client) = self.client(server) else {
-            return;
-        };
         let tx = self.tx.clone();
         let server = server.to_owned();
+        let Some(client) = self.client(&server) else {
+            let _ = tx.send(Msg::Created {
+                server,
+                result: Err("the server is not connected".to_owned()),
+            });
+            return;
+        };
         tokio::spawn(async move {
             let result = client.loop_create(params).await.map_err(|e| e.to_string());
             let _ = tx.send(Msg::Created { server, result });
@@ -242,7 +350,7 @@ impl Io {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let text = match process::open_editor_pane(&prefix, &path).await {
-                Ok(()) => format!("editor opened on {path}"),
+                Ok(command) => format!("editor pane: {command}"),
                 Err(e) => e,
             };
             let _ = tx.send(Msg::Notice(text));
@@ -272,7 +380,13 @@ pub(crate) struct App {
     pub input: String,
     pub notice: Option<Notice>,
     pub quit: bool,
-    /// Servers whose connection dropped.
+    /// A notice that does not expire: a server refused our protocol version
+    /// and no amount of waiting will change that (S21).
+    pub sticky: Option<Notice>,
+    /// Every server, in configuration order. More than one of them is what
+    /// makes an agent `server:id` on the screen.
+    pub servers: Vec<String>,
+    /// Servers whose connection dropped and is being reopened.
     pub lost: BTreeSet<String>,
     /// The TUI's own cwd, as the label it sends in `loop.list { cwd }`.
     pub cwd: String,
@@ -307,6 +421,8 @@ impl App {
             input: String::new(),
             notice: None,
             quit: false,
+            sticky: None,
+            servers: io.server_names(),
             lost: BTreeSet::new(),
             cwd,
             body_height: 10,
@@ -319,7 +435,24 @@ impl App {
         app.apply_loaded(loaded, false);
         for server in io.server_names() {
             io.subscribe_status(&server);
+            // The cwd is this machine's, sent to every server as written
+            // (D-31). On a server elsewhere it usually names nothing and
+            // the conversation list comes back empty; the running agents
+            // come back all the same.
             io.list(&server, Some(ServerPath::from(app.cwd.clone())));
+        }
+        // A server that was already down when the UI started never sends a
+        // `Disconnected`, so it is marked here and retried like any other.
+        for server in io.disconnected() {
+            app.lost.insert(server.clone());
+            io.reconnect(&server);
+        }
+        if !app.lost.is_empty() {
+            let names = app.lost.iter().cloned().collect::<Vec<_>>().join(", ");
+            app.notice(
+                NotifyLevel::Error,
+                format!("cannot reach {names}; reconnecting…"),
+            );
         }
         app
     }
@@ -475,6 +608,29 @@ impl App {
 
     pub(crate) fn agent_mut(&mut self, key: &LoopKey) -> Option<&mut Agent> {
         self.agents.iter_mut().find(|a| &a.key == key)
+    }
+
+    /// Whether a loop needs its server named: two servers can hand out the
+    /// same id, and one server is the phase-3 screen unchanged.
+    pub(crate) fn multi_server(&self) -> bool {
+        self.servers.len() > 1
+    }
+
+    /// How an agent is written on the screen: `server:id` across several
+    /// servers, the bare label on one (S18).
+    pub(crate) fn agent_label(&self, agent: &Agent) -> String {
+        match self.multi_server() {
+            true => format!("{}:{}", agent.key.server, agent.label()),
+            false => agent.label().to_owned(),
+        }
+    }
+
+    /// The same for a stored conversation, which belongs to a server too.
+    pub(crate) fn conversation_label(&self, conversation: &StoredConversation) -> String {
+        match self.multi_server() {
+            true => format!("{}:{}", conversation.server, conversation.label()),
+            false => conversation.label().to_owned(),
+        }
     }
 
     pub(crate) fn visible_page(&self) -> Option<&Page> {
@@ -716,11 +872,33 @@ impl App {
         match msg {
             Msg::Event { server, event } => self.handle_event(&server, event),
             Msg::ServerGone { server } => {
-                self.lost.insert(server.clone());
-                self.notice(
-                    NotifyLevel::Error,
-                    format!("connection to server `{server}` lost"),
-                );
+                // The wrapper keeps the subscriptions and the place in each
+                // loop's log; reopening the link replays what was missed
+                // (D-06, S19). All this has to do is say so and start the
+                // timer.
+                if self.lost.insert(server.clone()) {
+                    self.notice(
+                        NotifyLevel::Error,
+                        format!("server `{server}` disconnected; reconnecting…"),
+                    );
+                    self.io.reconnect(&server);
+                }
+            }
+            Msg::ServerBack { server } => {
+                self.lost.remove(&server);
+                self.notice(NotifyLevel::Info, format!("server `{server}` reconnected"));
+                // Whatever happened to the loops while we were away: the
+                // subscribed ones replay themselves, the list is asked
+                // again for the ones that came and went.
+                self.io
+                    .list(&server, Some(ServerPath::from(self.cwd.clone())));
+            }
+            Msg::Persistent { text } => {
+                self.sticky = Some(Notice {
+                    at: Instant::now(),
+                    level: NotifyLevel::Error,
+                    text,
+                });
             }
             Msg::Listed { server, result } => match result {
                 Ok(list) => self.merge_list(&server, list),
@@ -884,7 +1062,7 @@ impl App {
                 }
             }
             Event::UiNotify(e) => {
-                let label = self.agents[index].label().to_owned();
+                let label = self.agent_label(&self.agents[index]);
                 self.notice(e.level, format!("{label}: {}", e.text));
             }
             Event::FsChanged(e) => {
@@ -1432,15 +1610,7 @@ impl App {
                     return self.notice(NotifyLevel::Error, "no server");
                 };
                 if !args.is_empty() {
-                    return self.io.create(
-                        &server,
-                        LoopCreateParams {
-                            cwd: ServerPath::from(args),
-                            model: None,
-                            name: None,
-                            session: None,
-                        },
-                    );
+                    return self.new_agent(server, args.to_owned());
                 }
                 let default = self
                     .current_agent()
@@ -1463,7 +1633,7 @@ impl App {
                 let options = self
                     .conversations
                     .iter()
-                    .map(|c| format!("{}  {}", c.label(), c.info.cwd))
+                    .map(|c| format!("{}  {}", self.conversation_label(c), c.info.cwd))
                     .collect();
                 self.mode = Mode::Picker(Picker {
                     title: vec!["stored conversations".to_owned()],
@@ -1474,7 +1644,10 @@ impl App {
             }
             Builtin::Edit => match self.visible_page() {
                 Some(Page::File { key, path, .. }) => {
-                    let prefix = self.config.editor_prefix(&key.server).to_owned();
+                    // The prefix is the server's own (`servers.toml`), so a
+                    // file on the build box is edited over the same link
+                    // the agent is reached through (D-29).
+                    let prefix = self.io.editor_prefix(&key.server);
                     self.io.editor(prefix, path.to_string());
                 }
                 _ => self.notice(NotifyLevel::Info, "edit: open a file page first"),
@@ -1498,6 +1671,30 @@ impl App {
                 };
             }
         }
+    }
+
+    /// Start an agent in `cwd`, asking which server first when there is
+    /// more than one; `server` is the default, the selected agent's.
+    fn new_agent(&mut self, server: String, cwd: String) {
+        if !self.multi_server() {
+            return self.io.create(
+                &server,
+                LoopCreateParams {
+                    cwd: ServerPath::from(cwd),
+                    model: None,
+                    name: None,
+                    session: None,
+                },
+            );
+        }
+        let options = self.servers.clone();
+        let selected = options.iter().position(|s| *s == server).unwrap_or(0);
+        self.mode = Mode::Picker(Picker {
+            title: vec![format!("which server runs the agent in {cwd}?")],
+            options,
+            selected,
+            action: PickAction::NewAgentIn { cwd },
+        });
     }
 
     fn picker_key(&mut self, key: Key, mut picker: Picker) {
@@ -1524,6 +1721,15 @@ impl App {
                     (PickAction::OpenConversation, Some(_)) => {
                         self.open_conversation(picker.selected)
                     }
+                    (PickAction::NewAgentIn { cwd }, Some(server)) => self.io.create(
+                        &server,
+                        LoopCreateParams {
+                            cwd: ServerPath::from(cwd),
+                            model: None,
+                            name: None,
+                            session: None,
+                        },
+                    ),
                     (PickAction::OpenFile(key), Some(_)) => {
                         let path = self
                             .agent(&key)
@@ -1549,15 +1755,7 @@ impl App {
                     return;
                 }
                 match action {
-                    PromptAction::NewAgent { server } => self.io.create(
-                        &server,
-                        LoopCreateParams {
-                            cwd: ServerPath::from(value),
-                            model: None,
-                            name: None,
-                            session: None,
-                        },
-                    ),
+                    PromptAction::NewAgent { server } => self.new_agent(server, value),
                 }
             }
             Code::Backspace => {
