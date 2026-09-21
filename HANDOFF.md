@@ -28,8 +28,9 @@ Phase 3's total is lower than phase 2's because `pi-cli`'s 71 tests left with it
 
 ## Decisions taken without the user
 
-All are **proposed** entries at the end of `docs/design/90-decisions.md`, with the evidence.
-None of the layer files was edited for them (one exception below). Accept, reject, or
+Entries at the end of `docs/design/90-decisions.md`, with the evidence. D-38 to D-41 are still
+**proposed** and the layer files were not edited for them (one exception below); D-42 and
+D-43 are accepted and folded. Accept, reject, or
 supersede each; the code follows the entry as written.
 
 - **D-38** `loop.list { cwd? }` returns stored conversations. (phase 0)
@@ -39,9 +40,11 @@ supersede each; the code follows the entry as written.
   print it. (phase 2)
 - **D-41** `[settings]` has four keys: `model`, `thinking`, `tools`, `tool_execution`. (phase 2)
 - **D-42** A `[[tool]]` with `params` and neither `run` nor `loop` declares a tool served by
-  whichever client registered `tool.<name>`. (phase 4)
+  whichever client registered `tool.<name>`. (phase 4) **Accepted by the user 2026-09-21 and
+  folded into `40-dsl.md`.**
 - **D-43** An executable `[[prompt]] run` is a prompt handler over the assembled prompt,
-  the one exception to "prompts concatenate". (phase 4)
+  the one exception to "prompts concatenate". (phase 4) **Accepted by the user 2026-09-21
+  and folded into `40-dsl.md`.**
 
 Design prose edited for an *accepted* entry: the "Editing" bullet in
 `docs/design/20-architecture.md` said the TUI suspends into `$EDITOR`; it now matches D-29

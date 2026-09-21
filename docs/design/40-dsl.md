@@ -78,6 +78,12 @@ loop = { model = "claude-opus", prompt = "Review this diff critically:\n$diff", 
 [[tool]]
 name = "bash"
 disabled = true                        # or wrap = "./tools/sandboxed-bash.sh"
+
+[[tool]]                               # declared here, served by a connected process
+name = "browse"
+description = "Open a URL in the shared browser session"
+params.url = { type = "string" }
+# no run, no loop: whichever client registers `tool.browse` on the loop serves it (D-42)
 ```
 
 Eight slots — `input`, `prompt`, `tool_result`, `status`, `widget`, `on`, `command`, `tool` —
@@ -105,6 +111,15 @@ slot payload as one JSON line on stdin, and reads the reply from stdout.
   socket, so a one-shot executable never has to know the socket exists and the same handler
   code works on either. If it does open the socket, it can call `ui.*`, `loop.*` like any
   client.
+- A `[[tool]]` with `params` and neither `run` nor `loop` is a declaration (D-42): it supplies
+  the manifest entry (description, schema) and a call is dispatched to the client that
+  `register`ed `tool.<name>` on the loop, under that registrant's timeout; with no registrant
+  the model sees an error result. Registering `tool.<name>` for a name the policy defines
+  with `run` or `loop`, or for a built-in that is not declared, is refused; `timeout` on a
+  bare declaration is an error.
+- An executable `[[prompt]] run` is a prompt handler, not a block (D-43): it receives the
+  assembled prompt as `{ system_prompt }` and replies `{ append }` or `{ replace }`. See the
+  composition table.
 - There is no `persistent` flag (D-16). A long-lived extension is started from
   `[[on]] event = "start" run = "./watcher"`; `on` handlers are not waited for, so the process
   lives on, connects to the socket, registers the slots it wants, and is a *connected*
@@ -129,10 +144,11 @@ Loading a loop's DSL is: parse every applicable file, union the slots, check.
 | Check | Outcome |
 |---|---|
 | duplicate `tool` name | error unless one is `wrap`/`disabled` of the other |
+| a built-in name declared without `run`/`loop` | error; use `wrap` or `disabled` (D-42) |
 | duplicate `status`/`widget` key, duplicate `command` name | error |
 | several `tool_result`s for one tool | applied in file order |
 | several `input`s | file order; first `handled` stops |
-| several `prompt`s | concatenated in file order |
+| several `prompt`s | `text`, `files` and shell-string `run` entries concatenated in file order; then executable `run` entries in file order, each over the prompt as the previous one left it, each may append or replace; then registered `prompt` handlers (D-43) |
 | `on` entries | all run, file order |
 
 File order is path-sorted, global before project; `priority = N` moves a file earlier.

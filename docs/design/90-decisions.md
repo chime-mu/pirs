@@ -382,7 +382,7 @@ has four keys: `model`, `thinking`, `tools`, `tool_execution`. `deny_unknown_fie
 it closed. `settings.json` is no longer read; `models.json` (a provider catalogue, not a
 setting) still is.
 
-**D-42 · proposed · 2026-09-21 · A `[[tool]]` without `run` or `loop` declares a tool served by a connected handler.**
+**D-42 · accepted · 2026-09-21 · A `[[tool]]` without `run` or `loop` declares a tool served by a connected handler.**
 Recorded by the orchestrator during phase 4. `40-dsl.md` gives `[[tool]]` three shapes: `run`
 (a called process), `loop` (another agent), and `disabled`/`wrap` of a built-in. S9 says a
 long-lived extension "registers for the hooks it wants", and `register { slot: "tool.<name>" }`
@@ -394,7 +394,7 @@ registrant's timeout; with no registrant the model sees an error result. The pai
 schema where every other tool's schema lives, in the policy file, and keeps `register` as it is.
 Evidence: the `watch`/`fetch` examples and the phase 4 acceptance need it.
 
-**D-43 · proposed · 2026-09-21 · An executable `[[prompt]] run` is a prompt handler, the one exception to concatenation.**
+**D-43 · accepted · 2026-09-21 · An executable `[[prompt]] run` is a prompt handler, the one exception to concatenation.**
 Recorded by the orchestrator during phase 4. `40-dsl.md` composes `prompt` entries by
 concatenation in file order, and `30-protocol.md` gives the `prompt` slot the reply
 `{ append }` or `{ replace }`. A shell-string `[[prompt]] run` is a text block and
