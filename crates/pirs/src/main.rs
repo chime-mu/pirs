@@ -5,7 +5,7 @@
 //! - print mode (`pirs "prompt"`) — [`print`], the whole of S1 and S2;
 //! - `pirs serve` — the loop server in this process, and what a client
 //!   auto-starts;
-//! - `pirs stop`, `pirs --list` and `pirs check` — the small
+//! - `pirs stop`, `pirs --list`, `pirs check` and `pirs wait` — the small
 //!   administrative commands;
 //! - `pirs tui` — the reference UI, a client of the server like any other.
 //!
@@ -46,6 +46,9 @@ async fn dispatch(cli: Cli) -> i32 {
         Some(Command::Stop) => commands::stop::run(global.socket.as_deref()).await,
         Some(Command::Check) => {
             commands::check::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
+        }
+        Some(Command::Wait { target }) => {
+            commands::wait::run(&target, global.socket.as_deref(), global.no_start).await
         }
         Some(Command::Tui { headless, config }) => {
             commands::tui::run(

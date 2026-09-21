@@ -20,7 +20,7 @@ use serde_json::Value;
 use super::{
     CommandEntry, Emit, InputEntry, LoopSpec, OnEntry, OnSource, Origin, PolicyFile, PromptEntry,
     PromptSource, SettingsTable, StatusEntry, ToolEntry, ToolResultEntry, WidgetEntry,
-    WidgetSource, DEFAULT_TOOL_TIMEOUT,
+    WidgetSource,
 };
 
 /// Every key a policy file may have at the top level.
@@ -119,7 +119,7 @@ struct RawTool {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawLoop {
-    model: String,
+    model: Option<String>,
     prompt: String,
     wait: String,
 }
@@ -296,13 +296,28 @@ pub(super) fn parse_file(path: &Path, text: &str) -> Result<PolicyFile, Vec<Stri
             errors.push(format!("{origin}: `run` and `loop` are alternatives, not both"));
             bad = true;
         }
-        // `timeout` is how long the server waits for the process it spawns:
-        // a `run`, or the `wrap` a built-in's call is routed through. With
-        // neither there is no such process, and saying `timeout` there reads
-        // as a promise the server cannot keep.
-        if raw.timeout.is_some() && raw.run.is_none() && raw.wrap.is_none() {
+        // `timeout` is how long the server waits for what it starts: a
+        // `run`, the `wrap` a built-in's call is routed through, or the
+        // second loop a `loop` asks. With none of them there is nothing to
+        // bound, and saying `timeout` there reads as a promise the server
+        // cannot keep.
+        if raw.timeout.is_some() && raw.run.is_none() && raw.wrap.is_none() && raw.r#loop.is_none() {
             errors.push(format!("{origin}: `timeout` needs `run`; a declared tool uses its registrant's timeout"));
             bad = true;
+        }
+        // `wait = "idle"` is the whole vocabulary: the call returns when the
+        // second loop goes idle. Nothing else is implemented and nothing
+        // else is planned, so a typo is a parse error, not a surprise at
+        // call time.
+        if let Some(spec) = &raw.r#loop {
+            if spec.wait != "idle" {
+                errors.push(format!("{origin}: `loop.wait` is {:?}; the only value is \"idle\"", spec.wait));
+                bad = true;
+            }
+            if spec.prompt.trim().is_empty() {
+                errors.push(format!("{origin}: `loop.prompt` is empty; it is what the second loop is asked"));
+                bad = true;
+            }
         }
         // `params` with neither `run` nor `loop` declares a tool a connected
         // handler serves (D-23); `params = {}` declares one with no arguments.
@@ -321,8 +336,12 @@ pub(super) fn parse_file(path: &Path, text: &str) -> Result<PolicyFile, Vec<Stri
             params: raw.params.unwrap_or_default(),
             declared,
             run: raw.run,
-            timeout: raw.timeout.map_or(DEFAULT_TOOL_TIMEOUT, Duration::from_secs),
-            loop_spec: raw.r#loop.map(|l| LoopSpec { model: l.model, prompt: l.prompt, wait: l.wait }),
+            timeout: raw.timeout.map(Duration::from_secs),
+            loop_spec: raw.r#loop.map(|l| LoopSpec {
+                model: l.model.map(|m| m.trim().to_owned()).filter(|m| !m.is_empty()),
+                prompt: l.prompt,
+                wait: l.wait,
+            }),
             disabled: raw.disabled,
             wrap: raw.wrap,
         });

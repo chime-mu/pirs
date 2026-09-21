@@ -293,8 +293,9 @@ impl Spawned {
 ///
 /// - `$name` (an identifier: a letter or `_` then letters, digits, `_`) and
 ///   `${name}` are replaced when `name` is a key of `vars`.
-/// - A value larger than [`MAX_ENV_VALUE`] is substituted as the **empty
-///   string**, with one warning: the kernel refuses an `exec` whose argument
+/// - A value larger than `max` (the caller's cap: [`MAX_ENV_VALUE`] for a
+///   command line, none for text that never becomes one) is substituted as
+///   the **empty string**, with one warning: the kernel refuses an `exec` whose argument
 ///   is over 128 KiB, so pasting it would fail the whole call, and leaving
 ///   `$name` in place would hand the shell a variable it does not have. A
 ///   payload field that big is available on stdin only.
@@ -304,12 +305,12 @@ impl Spawned {
 ///   ordinary shell variable still reach the shell and still work.
 /// - `$$` is left as `$$`, so the shell still expands it to its own pid.
 /// - A `$` before anything else (a space, the end of the string) is literal.
-fn substitute(out: &mut String, name: &str, value: &str) {
-    if value.len() > MAX_ENV_VALUE {
+fn substitute(out: &mut String, name: &str, value: &str, max: Option<usize>) {
+    if max.is_some_and(|max| value.len() > max) {
         tracing::warn!(
             variable = %name,
             bytes = value.len(),
-            max = MAX_ENV_VALUE,
+            max = max.unwrap_or_default(),
             "value too large to interpolate into a command line; substituting the empty string (it is on stdin in full)"
         );
         return;
@@ -318,6 +319,17 @@ fn substitute(out: &mut String, name: &str, value: &str) {
 }
 
 pub(crate) fn interpolate(template: &str, vars: &BTreeMap<String, String>) -> String {
+    interpolate_with(template, vars, Some(MAX_ENV_VALUE))
+}
+
+/// The same substitution for text that never becomes a command line — a
+/// `[[tool]] loop`'s prompt — so a value larger than [`MAX_ENV_VALUE`] is
+/// pasted in full instead of being dropped: nothing is `exec`ed with it.
+pub(crate) fn interpolate_text(template: &str, vars: &BTreeMap<String, String>) -> String {
+    interpolate_with(template, vars, None)
+}
+
+fn interpolate_with(template: &str, vars: &BTreeMap<String, String>, max: Option<usize>) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(pos) = rest.find('$') {
@@ -335,7 +347,7 @@ pub(crate) fn interpolate(template: &str, vars: &BTreeMap<String, String>) -> St
                 Some(end) => {
                     let name = &after[1..end];
                     match vars.get(name) {
-                        Some(value) => substitute(&mut out, name, value),
+                        Some(value) => substitute(&mut out, name, value, max),
                         None => {
                             out.push('$');
                             out.push_str(&after[..=end]);
@@ -352,7 +364,7 @@ pub(crate) fn interpolate(template: &str, vars: &BTreeMap<String, String>) -> St
             Some(d) if d.is_ascii_digit() => {
                 let name = &after[..1];
                 match vars.get(name) {
-                    Some(value) => substitute(&mut out, name, value),
+                    Some(value) => substitute(&mut out, name, value, max),
                     None => {
                         out.push('$');
                         out.push_str(name);
@@ -367,7 +379,7 @@ pub(crate) fn interpolate(template: &str, vars: &BTreeMap<String, String>) -> St
                     .unwrap_or(after.len());
                 let name = &after[..end];
                 match vars.get(name) {
-                    Some(value) => substitute(&mut out, name, value),
+                    Some(value) => substitute(&mut out, name, value, max),
                     None => {
                         out.push('$');
                         out.push_str(name);
@@ -898,6 +910,17 @@ mod tests {
         assert_eq!(interpolate("./handoff.sh $args", &v), "./handoff.sh a b");
         assert_eq!(interpolate("$1$2", &v), "ls -lb");
         assert_eq!(interpolate("${url}/p", &v), "https://x/p");
+    }
+
+    #[test]
+    fn text_interpolation_pastes_a_value_a_command_line_could_not_take() {
+        // A diff handed to a `[[tool]] loop` prompt is not `exec`ed, so the
+        // command-line cap does not apply to it.
+        let big = "d".repeat(MAX_ENV_VALUE + 1);
+        let v = vars(&[("diff", big.as_str())]);
+        assert_eq!(interpolate("review $diff", &v), "review ");
+        assert_eq!(interpolate_text("review $diff", &v), format!("review {big}"));
+        assert_eq!(interpolate_text("cd $HOME", &v), "cd $HOME", "an unknown name is still left alone");
     }
 
     #[test]

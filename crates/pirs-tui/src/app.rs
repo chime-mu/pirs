@@ -390,6 +390,85 @@ impl App {
             .collect()
     }
 
+    /// How deep in the sidebar an agent sits: one level per ancestor that
+    /// is itself listed, so a loop a `[[tool]] loop` started is drawn under
+    /// the loop that started it (S16). A child whose parent is not in the
+    /// list — closed, or on another server — is drawn at the top level.
+    pub(crate) fn agent_depth(&self, index: usize) -> usize {
+        let mut depth = 0;
+        let mut agent = self.agents.get(index);
+        while let Some(current) = agent {
+            let Some(parent) = current.info.parent.as_deref() else {
+                break;
+            };
+            agent = self
+                .agents
+                .iter()
+                .find(|a| a.key.server == current.key.server && a.info.id == parent);
+            if agent.is_none() || depth >= self.agents.len() {
+                break;
+            }
+            depth += 1;
+        }
+        depth
+    }
+
+    /// Put the agents in the order the sidebar draws them: every top-level
+    /// loop in list order, each one followed at once by the loops it started
+    /// (S16). `loop.list` is ordered by id, so without this a child can land
+    /// above the parent it is drawn indented under. The selected agent stays
+    /// selected.
+    fn sort_agents(&mut self) {
+        let selected = match self.sidebar_items().get(self.sidebar) {
+            Some(SidebarItem::Agent(i)) => self.agents.get(*i).map(|a| a.key.clone()),
+            _ => None,
+        };
+        let n = self.agents.len();
+        let parent_of: Vec<Option<usize>> = self
+            .agents
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let parent = a.info.parent.as_deref()?;
+                self.agents
+                    .iter()
+                    .position(|b| b.key.server == a.key.server && b.info.id == parent)
+                    .filter(|&j| j != i)
+            })
+            .collect();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut stack: Vec<usize> = Vec::new();
+        for (i, parent) in parent_of.iter().enumerate() {
+            match parent {
+                Some(p) => children[*p].push(i),
+                None => stack.push(i),
+            }
+        }
+        stack.reverse();
+        let mut order = Vec::with_capacity(n);
+        let mut seen = vec![false; n];
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            order.push(i);
+            stack.extend(children[i].iter().rev().copied());
+        }
+        // A cycle in the `parent` links leaves loops unreached; they keep
+        // their place at the end rather than disappearing.
+        order.extend((0..n).filter(|i| !seen[*i]));
+        let mut taken: Vec<Option<Agent>> = self.agents.drain(..).map(Some).collect();
+        self.agents = order
+            .into_iter()
+            .filter_map(|i| taken[i].take())
+            .collect();
+        if let Some(key) = selected {
+            if let Some(i) = self.agents.iter().position(|a| a.key == key) {
+                self.sidebar = i;
+            }
+        }
+    }
+
     pub(crate) fn agent(&self, key: &LoopKey) -> Option<&Agent> {
         self.agents.iter().find(|a| &a.key == key)
     }
@@ -677,6 +756,7 @@ impl App {
                         Some(agent) => agent.info = info,
                         None => self.agents.push(Agent::new(&server, info)),
                     }
+                    self.sort_agents();
                     self.select_agent(key);
                 }
                 Err(e) => self.notice(NotifyLevel::Error, format!("loop.create: {e}")),
@@ -746,6 +826,7 @@ impl App {
                 None => self.agents.push(Agent::new(server, info)),
             }
         }
+        self.sort_agents();
         self.conversations.retain(|c| c.server != server);
         self.conversations.extend(
             list.conversations

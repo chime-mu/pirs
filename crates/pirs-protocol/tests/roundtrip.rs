@@ -171,6 +171,7 @@ fn all_responses() -> Vec<(Request, Response)> {
         state: LoopState::Idle,
         since: 5,
         conversation: "conv-1".into(),
+        parent: Some("L0".into()),
     };
     let manifest = Manifest {
         tools: vec![ToolInfo {

@@ -5,3 +5,4 @@ pub(crate) mod list;
 pub(crate) mod serve;
 pub(crate) mod stop;
 pub(crate) mod tui;
+pub(crate) mod wait;

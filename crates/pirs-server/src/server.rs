@@ -40,7 +40,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::{oneshot, Notify};
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::{CreateError, CreateOptions, LoopHandle};
+use crate::agent_loop::{ChildLoops, CreateError, CreateOptions, LoopHandle};
 use crate::log::{StarSubscribers, Subscriber};
 use crate::session::SessionManager;
 use crate::fs;
@@ -293,6 +293,41 @@ impl Server {
         }
     }
 
+    /// Close one loop and every loop it started (D-28: a loop started by a
+    /// `[[tool]] loop` call outlives the call, but not its parent). Returns
+    /// false when there was no such loop.
+    async fn close_loop(&self, id: &str) -> bool {
+        let closing: Vec<Arc<LoopHandle>> = {
+            let mut loops = self.loops.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(handle) = loops.remove(id) else {
+                return false;
+            };
+            let mut closing = vec![handle];
+            let mut frontier = vec![id.to_owned()];
+            while let Some(parent) = frontier.pop() {
+                let children: Vec<String> = loops
+                    .values()
+                    .filter(|l| l.parent.as_deref() == Some(parent.as_str()))
+                    .map(|l| l.id.clone())
+                    .collect();
+                for child in children {
+                    if let Some(handle) = loops.remove(&child) {
+                        frontier.push(child);
+                        closing.push(handle);
+                    }
+                }
+            }
+            closing
+        };
+        // The parent first: aborting its run is what ends a `[[tool]] loop`
+        // call still waiting on a child.
+        for handle in closing {
+            tracing::info!(loop_id = handle.id, "loop closed");
+            handle.close().await;
+        }
+        true
+    }
+
     async fn close_all(&self) {
         let loops: Vec<Arc<LoopHandle>> = self.loops.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, l)| l).collect();
         for l in loops {
@@ -463,15 +498,11 @@ impl Server {
                 let conn = conn.clone();
                 let id = rpc.id;
                 tokio::spawn(async move {
-                    let handle = server.loops.lock().unwrap_or_else(|e| e.into_inner()).remove(&p.loop_id);
-                    let result = match handle {
-                        Some(handle) => {
-                            handle.close().await;
-                            tracing::info!(loop_id = p.loop_id, "loop closed");
-                            server.activity.notify_one();
-                            serde_json::to_value(Empty {}).map_err(|e| RpcError::new(code::INTERNAL_ERROR, e.to_string()))
-                        }
-                        None => Err(RpcError::new(code::UNKNOWN_LOOP, format!("no loop {:?}", p.loop_id))),
+                    let result = if server.close_loop(&p.loop_id).await {
+                        server.activity.notify_one();
+                        serde_json::to_value(Empty {}).map_err(|e| RpcError::new(code::INTERNAL_ERROR, e.to_string()))
+                    } else {
+                        Err(RpcError::new(code::UNKNOWN_LOOP, format!("no loop {:?}", p.loop_id)))
                     };
                     conn.reply(id, result);
                 });
@@ -507,22 +538,19 @@ impl Server {
                 Err(RpcError::new(code::INTERNAL_ERROR, "handled elsewhere"))
             }
             Request::LoopCreate(p) => {
-                let id = self.new_loop_id();
                 let opts = CreateOptions {
                     cwd: PathBuf::from(p.cwd.as_str()),
                     model: p.model,
                     name: p.name,
                     session: p.session,
+                    parent: None,
                     socket: self.socket.clone(),
                 };
-                let handle = LoopHandle::create(id.clone(), opts, self.star.clone()).map_err(|e| match e {
+                let handle = self.clone().create_child(opts).map_err(|e| match e {
                     CreateError::NotFound(m) => RpcError::new(code::NOT_FOUND, m),
                     CreateError::Invalid(m) => RpcError::new(code::INVALID_PARAMS, m),
                     CreateError::Internal(e) => RpcError::new(code::INTERNAL_ERROR, format!("{e:#}")),
                 })?;
-                tracing::info!(loop_id = id, cwd = %handle.cwd.display(), conversation = handle.conversation, "loop created");
-                self.loops.lock().unwrap_or_else(|e| e.into_inner()).insert(id, handle.clone());
-                self.activity.notify_one();
                 ok(handle.info())
             }
             Request::LoopList(p) => {
@@ -649,6 +677,32 @@ impl Server {
                 ok(crate::policy::check(&cwd, &self.socket).await)
             }
         }
+    }
+}
+
+impl ChildLoops for Server {
+    fn create_child(self: Arc<Self>, opts: CreateOptions) -> Result<Arc<LoopHandle>, CreateError> {
+        let id = self.new_loop_id();
+        let weak = {
+            let strong: Arc<dyn ChildLoops> = self.clone();
+            Arc::downgrade(&strong)
+        };
+        let parent = opts.parent.clone();
+        let handle = LoopHandle::create(id.clone(), opts, self.star.clone(), weak)?;
+        tracing::info!(
+            loop_id = id,
+            cwd = %handle.cwd.display(),
+            conversation = handle.conversation,
+            parent = parent.unwrap_or_default(),
+            "loop created"
+        );
+        self.loops.lock().unwrap_or_else(|e| e.into_inner()).insert(id, handle.clone());
+        self.activity.notify_one();
+        Ok(handle)
+    }
+
+    fn find_loop(&self, id: &str) -> Option<Arc<LoopHandle>> {
+        self.loops.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
     }
 }
 

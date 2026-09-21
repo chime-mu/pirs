@@ -52,12 +52,29 @@ pub(crate) enum CreateError {
     Internal(anyhow::Error),
 }
 
+/// What a loop needs from its server to start a second loop: a `[[tool]]`
+/// with `loop = { … }` is a client like any other (D-23), except that the
+/// client is the server's own tool call, so it asks for the loop here
+/// instead of over the socket.
+pub(crate) trait ChildLoops: Send + Sync {
+    /// Create a loop and register it in the server's table, exactly as
+    /// `loop.create` does. `opts.parent` names the loop asking.
+    fn create_child(self: Arc<Self>, opts: CreateOptions) -> Result<Arc<LoopHandle>, CreateError>;
+
+    /// A loop in the server's table by id, so a `[[tool]] loop` can walk the
+    /// `parent` links above itself and see how deep it already is.
+    fn find_loop(&self, id: &str) -> Option<Arc<LoopHandle>>;
+}
+
 /// `loop.create` parameters, already typed.
 pub(crate) struct CreateOptions {
     pub(crate) cwd: PathBuf,
     pub(crate) model: Option<ModelSpec>,
     pub(crate) name: Option<String>,
     pub(crate) session: Option<String>,
+    /// The loop this one was started by (a `[[tool]] loop` call); `None` for
+    /// a loop a client asked for.
+    pub(crate) parent: Option<String>,
     /// The socket the server listens on, so a called process can connect
     /// back as a client (`PIRS_SOCKET`, D-23).
     pub(crate) socket: PathBuf,
@@ -96,6 +113,11 @@ impl SystemFingerprint {
 pub(crate) struct LoopHandle {
     pub(crate) id: String,
     pub(crate) name: Option<String>,
+    /// The loop that started this one with a `[[tool]] loop` call (D-28:
+    /// it outlives the call, and dies with its parent).
+    pub(crate) parent: Option<String>,
+    /// The server, for a `[[tool]] loop` that has to start a child.
+    pub(crate) server: Weak<dyn ChildLoops>,
     pub(crate) cwd: PathBuf,
     /// `PIRS_SOCKET` for every process this loop calls.
     pub(crate) socket: PathBuf,
@@ -107,6 +129,11 @@ pub(crate) struct LoopHandle {
     pub(crate) handlers: Mutex<Vec<Registration>>,
     registry: ModelRegistry,
     status: Mutex<(LoopState, u64)>,
+    /// The `detail` of the last status change: `None` while working and
+    /// after a clean run, `Some("aborted")`, `Some("error: …")` or
+    /// `Some("closed")` otherwise. What a `[[tool]] loop` reads to see how
+    /// the second loop ended.
+    detail: Mutex<Option<String>>,
     working: AtomicBool,
     idle: Notify,
     builtin: Vec<ToolRef>,
@@ -178,7 +205,12 @@ pub(crate) fn registry_for(cwd: &Path) -> ModelRegistry {
 }
 
 impl LoopHandle {
-    pub(crate) fn create(id: String, opts: CreateOptions, star: StarSubscribers) -> Result<Arc<Self>, CreateError> {
+    pub(crate) fn create(
+        id: String,
+        opts: CreateOptions,
+        star: StarSubscribers,
+        server: Weak<dyn ChildLoops>,
+    ) -> Result<Arc<Self>, CreateError> {
         let cwd = std::fs::canonicalize(&opts.cwd).map_err(|e| CreateError::Invalid(format!("cwd {}: {e}", opts.cwd.display())))?;
         if !cwd.is_dir() {
             return Err(CreateError::Invalid(format!("cwd {} is not a directory", cwd.display())));
@@ -251,10 +283,12 @@ impl LoopHandle {
             Some(names) => names.clone(),
             None => tools::DEFAULT_TOOL_NAMES.iter().map(|s| (*s).to_owned()).collect(),
         };
-        let warnings = policy::load_warnings(&policy);
+        let warnings = policy::load_warnings(&policy, &registry);
         let handle = Arc::new(LoopHandle {
             id: id.clone(),
             name,
+            parent: opts.parent.clone(),
+            server,
             cwd: cwd.clone(),
             socket: opts.socket,
             session_dir,
@@ -264,6 +298,7 @@ impl LoopHandle {
             handlers: Mutex::new(Vec::new()),
             registry,
             status: Mutex::new((LoopState::Idle, now_ms())),
+            detail: Mutex::new(None),
             working: AtomicBool::new(false),
             idle: Notify::new(),
             builtin: tools::builtin_tools(&cwd),
@@ -337,7 +372,32 @@ impl LoopHandle {
             state,
             since,
             conversation: self.conversation.clone(),
+            parent: self.parent.clone(),
         }
+    }
+
+    /// How the last run ended: `None` after a clean one (or while one is
+    /// running), otherwise `aborted`, `error: …` or `closed`.
+    pub(crate) fn last_detail(&self) -> Option<String> {
+        self.detail.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The text of the last assistant message, which is what a loop that
+    /// was asked a question answered with.
+    pub(crate) fn last_assistant_text(&self) -> Option<String> {
+        self.agent.messages().iter().rev().find_map(|message| match message {
+            AgentMessage::Assistant(a) => {
+                let text: String = a.content.iter().filter_map(pi_ai::Content::as_text).collect::<Vec<_>>().join("");
+                Some(text)
+            }
+            _ => None,
+        })
+    }
+
+    /// Whether this server's registry knows a model spelled like this;
+    /// what a `[[tool]] loop` asks before naming it for its child.
+    pub(crate) fn resolves_model(&self, spec: &str) -> bool {
+        self.registry.find(spec).is_some()
     }
 
     /// The policy as of the last load.
@@ -492,7 +552,7 @@ impl LoopHandle {
             .iter()
             .map(|path| ServerPath::from(path.to_string_lossy().into_owned()))
             .collect();
-        let warnings = policy::load_warnings(&policy);
+        let warnings = policy::load_warnings(&policy, &self.registry);
         *self.policy.lock().unwrap_or_else(|e| e.into_inner()) = policy;
         *self.policy_warnings.lock().unwrap_or_else(|e| e.into_inner()) = warnings;
         self.flush_policy_warnings();
@@ -744,6 +804,7 @@ impl LoopHandle {
     fn set_status(&self, state: LoopState, detail: Option<String>) {
         let since = now_ms();
         *self.status.lock().unwrap_or_else(|e| e.into_inner()) = (state, since);
+        *self.detail.lock().unwrap_or_else(|e| e.into_inner()) = detail.clone();
         let mut data = json!({ "state": state, "since": since });
         if let Some(detail) = detail {
             data["detail"] = Value::String(detail);

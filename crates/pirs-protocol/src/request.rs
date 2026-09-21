@@ -79,6 +79,10 @@ pub struct LoopInfo {
     pub since: u64,
     /// The id of the conversation (session log) this loop appends to.
     pub conversation: String,
+    /// The loop that created this one through a `[[tool]] loop = …` call;
+    /// absent for a top-level loop. Closing the parent closes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 /// A conversation on disk, whether or not a loop currently runs on it (D-28).

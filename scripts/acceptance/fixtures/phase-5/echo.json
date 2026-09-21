@@ -1,0 +1,4 @@
+[
+  {"toolCalls": [{"name": "review", "arguments": {"text": "the diff"}}]},
+  "CHILD-VERDICT: fine"
+]

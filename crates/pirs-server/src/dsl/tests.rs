@@ -132,17 +132,17 @@ fn every_slot_of_the_design_file_parses() {
 
     assert_eq!(file.tool.len(), 3);
     assert_eq!(file.tool[0].name, "fetch");
-    assert_eq!(file.tool[0].timeout, Duration::from_secs(30));
+    assert_eq!(file.tool[0].timeout, Some(Duration::from_secs(30)));
     assert_eq!(file.tool[0].params["url"], json!({"type": "string", "description": "Absolute http(s) URL"}));
     assert_eq!(
         file.tool[1].loop_spec,
         Some(LoopSpec {
-            model: "claude-opus".to_owned(),
+            model: Some("claude-opus".to_owned()),
             prompt: "Review this diff critically:\n$diff".to_owned(),
             wait: "idle".to_owned(),
         })
     );
-    assert_eq!(file.tool[2].timeout, DEFAULT_TOOL_TIMEOUT, "a tool without `timeout` gets the default");
+    assert_eq!(file.tool[2].timeout, None, "a tool without `timeout` says so; the default is the composer's");
     assert!(file.tool[2].disabled);
 }
 
@@ -590,7 +590,7 @@ fn timeout_bounds_a_wrapper_too() {
     dirs.project("m.pirs.toml", "intent = 'm'\n[[tool]]\nname = 'bash'\nwrap = './sandbox.sh'\ntimeout = 30\n");
     let policy = dirs.load();
     assert!(policy.errors.is_empty(), "{:?}", policy.errors);
-    assert_eq!(policy.tools[0].timeout, std::time::Duration::from_secs(30));
+    assert_eq!(policy.tools[0].timeout, Some(std::time::Duration::from_secs(30)));
 }
 
 #[test]
@@ -643,12 +643,49 @@ fn params_become_a_json_schema_where_a_default_means_optional() {
             "required": ["url"],
         })
     );
-    assert_eq!(fetch.timeout, Duration::from_secs(30));
+    assert_eq!(fetch.timeout, Some(Duration::from_secs(30)));
 
     let review = policy.tools.iter().find(|tool| tool.name == "review").expect("review");
     assert_eq!(review.parameters, json!({"type": "object", "properties": {}, "required": []}));
     assert!(!review.declares_params());
     assert!(matches!(review.source, ToolSource::Loop(_)));
+    assert_eq!(review.timeout, None, "a loop tool without `timeout` is not bounded by one");
+}
+
+#[test]
+fn a_loop_tool_takes_only_wait_idle_and_needs_a_prompt() {
+    let dirs = Dirs::new();
+    let m = dirs.project(
+        "m.pirs.toml",
+        "intent = 'm'\n[[tool]]\nname = 'review'\nloop = { model = 'x', prompt = 'p', wait = 'now' }\n",
+    );
+    let policy = dirs.load();
+    assert_eq!(policy.errors.len(), 1, "{:?}", policy.errors);
+    assert_eq!(policy.errors[0].0, m);
+    assert!(policy.errors[0].1.contains("`loop.wait` is \"now\""), "{:?}", policy.errors[0]);
+    assert!(policy.tools.is_empty(), "the entry did not load");
+
+    let dirs = Dirs::new();
+    dirs.project(
+        "m.pirs.toml",
+        "intent = 'm'\n[[tool]]\nname = 'review'\nloop = { prompt = '  ', wait = 'idle' }\n",
+    );
+    let policy = dirs.load();
+    assert!(policy.errors[0].1.contains("`loop.prompt` is empty"), "{:?}", policy.errors);
+}
+
+#[test]
+fn a_loop_tool_may_name_a_timeout_and_may_leave_the_model_out() {
+    let dirs = Dirs::new();
+    dirs.project(
+        "m.pirs.toml",
+        "intent = 'm'\n[[tool]]\nname = 'review'\nloop = { prompt = 'p', wait = 'idle' }\ntimeout = 120\n",
+    );
+    let policy = dirs.load();
+    assert!(policy.errors.is_empty(), "{:?}", policy.errors);
+    let review = &policy.tools[0];
+    assert_eq!(review.timeout, Some(Duration::from_secs(120)));
+    assert!(matches!(&review.source, ToolSource::Loop(spec) if spec.model.is_none()));
 }
 
 #[test]
@@ -734,6 +771,7 @@ fn render_shows_every_slot_with_the_file_it_came_from() {
         "widget \"todo\"",
         "fetch  run \"./tools/fetch.py\", params max_length, url, timeout 30s  (/p/a.pirs.toml: [[tool]] #1)",
         "bash  built-in, disabled, timeout 60s  (/p/a.pirs.toml: [[tool]] #3)",
+        "review  loop \u{2192} claude-opus, no timeout  (/p/a.pirs.toml: [[tool]] #2)",
         "/handoff  Start a fresh session with a summary",
         "status keys: branch",
         "widget keys: todo",

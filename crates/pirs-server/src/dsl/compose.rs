@@ -204,6 +204,7 @@ fn resolve_tool(policy: &mut Policy, name: &str, group: &[ToolEntry]) {
         group.iter().map(|entry| &entry.params).find(|params| !params.is_empty())
     });
 
+    let timeout = timeout(base, group, &source);
     policy.tools.push(ResolvedTool {
         name: name.to_owned(),
         description: described.and_then(|entry| entry.description.clone()).unwrap_or_default(),
@@ -211,23 +212,26 @@ fn resolve_tool(policy: &mut Policy, name: &str, group: &[ToolEntry]) {
         source,
         disabled: group.iter().any(|entry| entry.disabled),
         wrap: wraps.first().and_then(|entry| entry.wrap.clone()),
-        timeout: timeout(base, group),
+        timeout,
         origins: group.iter().map(|entry| entry.origin.clone()).collect(),
     });
 }
 
-/// The first explicit `timeout` in the group, preferring the base entry.
-fn timeout(base: Option<&ToolEntry>, group: &[ToolEntry]) -> Duration {
-    if let Some(entry) = base {
-        if entry.timeout != DEFAULT_TOOL_TIMEOUT {
-            return entry.timeout;
-        }
+/// The first explicit `timeout` in the group, preferring the base entry;
+/// without one, the default for the kind of tool this is. A `[[tool]] loop`
+/// has no default: a second loop reviewing a diff is not a 60-second job, so
+/// only a `timeout` written in the file bounds it.
+fn timeout(base: Option<&ToolEntry>, group: &[ToolEntry], source: &ToolSource) -> Option<Duration> {
+    if let Some(timeout) = base.and_then(|entry| entry.timeout) {
+        return Some(timeout);
     }
-    group
-        .iter()
-        .map(|entry| entry.timeout)
-        .find(|timeout| *timeout != DEFAULT_TOOL_TIMEOUT)
-        .unwrap_or(DEFAULT_TOOL_TIMEOUT)
+    if let Some(timeout) = group.iter().find_map(|entry| entry.timeout) {
+        return Some(timeout);
+    }
+    match source {
+        ToolSource::Loop(_) => None,
+        _ => Some(DEFAULT_TOOL_TIMEOUT),
+    }
 }
 
 /// The JSON Schema object a `params` table describes: a param without a

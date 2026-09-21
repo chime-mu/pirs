@@ -88,6 +88,7 @@ pub fn loop_info(id: &str, name: &str, state: LoopState) -> LoopInfo {
         state,
         since: 1,
         conversation: format!("c-{id}"),
+        parent: None,
     }
 }
 
@@ -326,6 +327,7 @@ fn answer(state: &Arc<Mutex<State>>, request: &RpcRequest) -> (RpcResponse, Vec<
                 state: LoopState::Idle,
                 since: 2,
                 conversation: p.session.unwrap_or_else(|| format!("c-n{}", state.created)),
+                parent: None,
             };
             state.loops.push(info.clone());
             (ok(id, info), Vec::new())

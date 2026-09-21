@@ -1134,6 +1134,13 @@
             "null"
           ]
         },
+        "parent": {
+          "description": "The loop that created this one through a `[[tool]] loop = …` call;\nabsent for a top-level loop. Closing the parent closes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "since": {
           "description": "Unix milliseconds when `state` last changed.",
           "type": "integer",

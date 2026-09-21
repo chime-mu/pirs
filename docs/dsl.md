@@ -151,9 +151,10 @@ run = "./scripts/handoff.sh $args"
 ### `[[tool]]` — give the model an executable
 
 `name` (required) · `description` · `params.<field> = { type, description, default }` ·
-`run` · `timeout` (default 60 s) · `disabled` (bool) · `wrap` (a program the real tool's
-call is routed through) · `loop = { model, prompt, wait }` instead of `run` · `params`
-alone (no `run`, no `loop`) declares a tool a connected process serves
+`run` · `timeout` (seconds; default 60 s for a `run`, none for a `loop`) · `disabled`
+(bool) · `wrap` (a program the real tool's call is routed through) ·
+`loop = { model, prompt, wait }` instead of `run` · `params` alone (no `run`, no `loop`)
+declares a tool a connected process serves
 
 ```toml
 [[tool]]
@@ -207,6 +208,61 @@ string or a list of `text`/`image` blocks and `details` is metadata the model ne
   how a built-in changes hands.
 - `wrap = "./tools/sandboxed-bash.sh"` on a built-in: the same rule decides whether the
   wrapper is an executable or a shell string, and it receives the built-in's `{ args, id }`.
+- `loop = { model, prompt, wait = "idle" }` — a second agent answers, see below.
+
+### `[[tool]] loop` — ask a second agent
+
+```toml
+[[tool]]
+name = "review"
+description = "Ask a second loop to review the diff"
+loop = { model = "anthropic/claude-opus-4-1", prompt = "Review this diff critically:\n$diff", wait = "idle" }
+params.diff = { type = "string", description = "The diff to review" }
+```
+
+The call starts a second loop in the *same directory*, prompts it, waits for it to stop,
+and hands its final message back as the tool result. The three fields:
+
+- **`model`** — what the second loop runs, spelled as `--model` spells it
+  (`provider/id`, or an id the server's registry resolves). Optional: without it the second
+  loop runs the *calling* loop's model. A `model` this server cannot resolve is a mistake in
+  the file, not a fallback: the load warns (so `pirs check` reports it as a conflict) and a
+  call fails with the error result ``tool `review`: unknown model `claude-opus` ``.
+- **`prompt`** — what it is asked. Every argument of the call is a variable: `$diff` and
+  `${diff}` are both replaced by the `diff` argument, an object or array argument is pasted
+  as compact JSON, and a name the call did not carry is left as it stands (so `$HOME` in a
+  prompt stays `$HOME`). The substitution is raw text — nothing is quoted or escaped,
+  because nothing here reaches a shell.
+- **`wait`** — `"idle"`, and only `"idle"`: the call returns when the second loop goes
+  idle. Any other value is a parse error `pirs check` reports.
+
+The second loop **is a loop like any other**: it is in `loop.list` with `parent` set to the
+calling loop, named `<caller>/<tool>`, a UI draws it under its parent, and you can attach to
+it and watch it work. `parent` and the close cascade below are the server's own: a client's
+`loop.create` cannot claim a parent, so only a `[[tool]] loop` call makes one. It reads the
+same policy files, so give it a `[settings] tools` or a `disabled` if it should not have the
+same tools — and note that it is offered the `loop` tool as well, so a policy can recurse:
+a call nested more than 8 deep is refused with the error result
+``loop tool `review`: nesting deeper than 8`` and a warning, which is an implementation
+limit and nothing more.
+
+`wait = "idle"` is *idle*, not *finished*: a second loop that stops to ask a question is
+idle, so the call returns then and the question itself is the answer the calling model
+reads.
+
+**Lifetime.** The second loop stays alive after it answers, so you can read what it did
+(D-28); it is closed when its parent is closed, and `loop.abort` on the parent aborts it and
+ends the call with an error result. A loop that ends in an error, or that is closed or
+aborted, is an error result for the caller, with the second loop's id in the message.
+
+**Timeout.** A `[[tool]] loop` uses the `timeout` the entry declares, and has **no timeout**
+when it declares none: 60 seconds is right for a script and wrong for a review. Write
+`timeout = 900` to bound it; on expiry the second loop is aborted and the caller reads an
+error.
+
+**In the log.** The tool result the calling loop records carries
+`details = { "loop": "<second loop's id>", "conversation": "<its conversation id>" }`, so a
+reader of the session log can open the conversation the answer came from.
 
 ## `[settings]`
 

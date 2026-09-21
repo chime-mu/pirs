@@ -42,7 +42,9 @@ pub const POLICY_SUFFIX: &str = ".pirs.toml";
 /// project's `.pirs`.
 pub const POLICY_DIR: &str = "ext";
 
-/// A `[[tool]]` without `timeout` gets this one (the plan's default).
+/// A `[[tool]]` with a `run` and without `timeout` gets this one (the plan's
+/// default). A `[[tool]] loop` without `timeout` gets none at all: a review
+/// by a second loop is not a 60-second job.
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
@@ -221,12 +223,15 @@ pub struct CommandEntry {
 /// `loop = { model, prompt, wait }`: a `[[tool]]` that asks a second loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopSpec {
-    /// The model the second loop runs.
-    pub model: String,
+    /// The model the second loop runs; absent means the calling loop's own.
+    /// One that is named but that the server's registry cannot resolve is an
+    /// error, not a fallback: the load warns and the call fails.
+    pub model: Option<String>,
     /// Its first prompt, with `$field` interpolation from the call's
     /// arguments.
     pub prompt: String,
-    /// When the call returns; `"idle"` is the loop going idle.
+    /// When the call returns. `"idle"` — the second loop going idle — is
+    /// the only value; anything else is a parse error.
     pub wait: String,
 }
 
@@ -248,8 +253,8 @@ pub struct ToolEntry {
     pub declared: bool,
     /// The executable or shell string the call runs.
     pub run: Option<String>,
-    /// `timeout`, in seconds; [`DEFAULT_TOOL_TIMEOUT`] when absent.
-    pub timeout: Duration,
+    /// `timeout`, in seconds, as the file wrote it; `None` when it did not.
+    pub timeout: Option<Duration>,
     /// `loop = { … }` instead of `run`.
     pub loop_spec: Option<LoopSpec>,
     /// `disabled`: the model is not offered this tool.
@@ -375,8 +380,9 @@ pub struct ResolvedTool {
     pub disabled: bool,
     /// A program the real call is routed through.
     pub wrap: Option<String>,
-    /// How long a call may take.
-    pub timeout: Duration,
+    /// How long a call may take; `None` is no limit, which is what a
+    /// `[[tool]] loop` without an explicit `timeout` gets.
+    pub timeout: Option<Duration>,
     /// Every `[[tool]]` entry that contributed, in file order.
     pub origins: Vec<Origin>,
 }
@@ -717,7 +723,9 @@ pub fn render(policy: &Policy) -> String {
             let source = match &tool.source {
                 ToolSource::Builtin => "built-in".to_owned(),
                 ToolSource::Run(run) => format!("run {run:?}"),
-                ToolSource::Loop(spec) => format!("loop {} wait {}", spec.model, spec.wait),
+                ToolSource::Loop(spec) => {
+                    format!("loop \u{2192} {}", spec.model.as_deref().unwrap_or("the loop's own model"))
+                }
                 ToolSource::Handler => "handler (a client registering tool.<name>)".to_owned(),
             };
             let mut extra = Vec::new();
@@ -736,7 +744,10 @@ pub fn render(policy: &Policy) -> String {
                     .unwrap_or_default();
                 extra.push(format!("params {}", params.join(", ")));
             }
-            extra.push(format!("timeout {}s", tool.timeout.as_secs()));
+            extra.push(match tool.timeout {
+                Some(timeout) => format!("timeout {}s", timeout.as_secs()),
+                None => "no timeout".to_owned(),
+            });
             let origins: Vec<String> = tool.origins.iter().map(Origin::to_string).collect();
             out.push_str(&format!("  {}  {source}, {}  ({})\n", tool.name, extra.join(", "), origins.join("; ")));
         }

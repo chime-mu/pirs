@@ -37,31 +37,43 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use pi_agent::{AgentTool, ToolRef, ToolResult, UpdateFn};
-use pi_ai::now_ms;
+use pi_ai::{now_ms, ModelRegistry};
 use pirs_protocol::{
-    DslCheckResult, DslConflict, InputPayload, InputReply, NotifyLevel, OnEvent, OnPayload, PromptPayload, PromptReply,
-    ServerPath, SlotReply, SlotRequest, ToolCallPayload, ToolContent, ToolReply, ToolResultPayload,
+    DslCheckResult, DslConflict, InputPayload, InputReply, ModelSpec, NotifyLevel, OnEvent, OnPayload, PromptPayload,
+    PromptReply, PromptWhen, ServerPath, SlotReply, SlotRequest, ToolCallPayload, ToolContent, ToolReply,
+    ToolResultPayload,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::LoopHandle;
-use crate::dsl::{self, Emit, InputEntry, OnEntry, OnSource, Origin, Policy, PromptSource, ResolvedTool, ToolSource};
+use crate::agent_loop::{CreateError, CreateOptions, LoopHandle};
+use crate::dsl::{
+    self, Emit, InputEntry, LoopSpec, OnEntry, OnSource, Origin, Policy, PromptSource, ResolvedTool, ToolSource,
+};
 use crate::process::{self, CallEnv, CallError, RunSpec};
 
 /// How long a called process for `input`, `prompt`, `tool_result`, `status`
 /// or `widget` may take before it counts as "no opinion".
 pub(crate) const SLOT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How deep `[[tool]] loop` calls may nest: a loop eight `parent` links
+/// below a loop a client created is the last one that can start another.
+///
+/// This is an implementation limit — a policy whose second loop reads the
+/// same policy can call itself for ever, and something has to stop it — and
+/// not a judgement on what the model is doing (D-19).
+pub(crate) const MAX_LOOP_DEPTH: usize = 8;
+
 // ---------------------------------------------------------------------------
 // Warnings
 // ---------------------------------------------------------------------------
 
-/// The warnings a load produced: one line per parse error and per conflict.
+/// The warnings a load produced: one line per parse error, per conflict and
+/// per `[[tool]] loop` naming a model this server cannot resolve.
 ///
 /// They are not fatal — the loop keeps every entry that did load — so they
 /// travel as `ui.notify { warning }` rather than as a failure.
-pub(crate) fn load_warnings(policy: &Policy) -> Vec<String> {
+pub(crate) fn load_warnings(policy: &Policy, registry: &ModelRegistry) -> Vec<String> {
     let mut out = Vec::new();
     for (path, message) in &policy.errors {
         out.push(format!("{}: {message}", path.display()));
@@ -70,7 +82,34 @@ pub(crate) fn load_warnings(policy: &Policy) -> Vec<String> {
         let files: Vec<&str> = conflict.files.iter().map(ServerPath::as_str).collect();
         out.push(format!("{} ({})", conflict.message, files.join(", ")));
     }
+    for (origin, message) in unresolvable_models(policy, registry) {
+        out.push(format!("{origin}: {message}"));
+    }
     out
+}
+
+/// Every `[[tool]] loop` whose `model` this server cannot resolve, with the
+/// entry that named it. The call itself fails with the same line, but the
+/// file is wrong the moment it is loaded, so it is said then too — which is
+/// what puts it in `pirs check` and in the loop's first `ui.notify`.
+fn unresolvable_models(policy: &Policy, registry: &ModelRegistry) -> Vec<(Origin, String)> {
+    let mut out = Vec::new();
+    for tool in &policy.tools {
+        let ToolSource::Loop(spec) = &tool.source else { continue };
+        let Some(wanted) = spec.model.as_deref() else { continue };
+        if registry.find(wanted).is_some() {
+            continue;
+        }
+        let Some(origin) = tool.origins.first() else { continue };
+        out.push((origin.clone(), unknown_model(&tool.name, wanted)));
+    }
+    out
+}
+
+/// What a `[[tool]] loop` whose `model` cannot be resolved says: the error
+/// result the calling model reads, and the warning the load produced.
+fn unknown_model(tool: &str, model: &str) -> String {
+    format!("tool `{tool}`: unknown model `{model}`")
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +434,15 @@ pub(crate) async fn check(cwd: &Path, socket: &Path) -> DslCheckResult {
     let system_prompt = prompt_executables(&executables, base, &env, &mut failures).await;
 
     let mut conflicts = dsl::check_conflicts(&policy);
+    // A `[[tool]] loop` naming a model this server cannot resolve is a
+    // conflict `pirs check` reports, next to the parse errors: the call
+    // would fail, and the file is where it is wrong.
+    for (origin, message) in unresolvable_models(&policy, &crate::agent_loop::registry_for(cwd)) {
+        conflicts.push(DslConflict {
+            message: format!("{origin}: {message}"),
+            files: vec![ServerPath::from(origin.file.to_string_lossy().into_owned())],
+        });
+    }
     for failure in failures {
         conflicts.push(DslConflict {
             message: format!("{}: {}", failure.origin, failure.message),
@@ -671,7 +719,7 @@ impl LoopHandle {
             (Some(wrap), _) => Backend::Run(wrap.clone()),
             (None, ToolSource::Run(run)) => Backend::Run(run.clone()),
             (None, ToolSource::Handler) => Backend::Handler,
-            (None, ToolSource::Loop(_)) => Backend::Loop,
+            (None, ToolSource::Loop(spec)) => Backend::Loop(spec.clone()),
             // A modifier entry that neither disables nor wraps leaves the
             // built-in exactly as it was.
             (None, ToolSource::Builtin) => return builtin.cloned().expect("a built-in source has a built-in"),
@@ -694,6 +742,161 @@ impl LoopHandle {
             backend,
             timeout: tool.timeout,
         })
+    }
+
+    // ----- a second loop --------------------------------------------------
+
+    /// Run a `[[tool]] loop = { model, prompt, wait = "idle" }` call: create
+    /// a second loop in this loop's directory, prompt it with the
+    /// interpolated `prompt`, wait for it to go idle, and return its final
+    /// message as the result (S16).
+    ///
+    /// The child is a loop like any other: it is in `loop.list` with
+    /// `parent` set, a client can attach to it and watch, and it stays alive
+    /// after answering so it can be read (D-28). What it does not outlive is
+    /// its parent: `loop.close` on the parent closes it too, and
+    /// `loop.abort` on the parent aborts it and ends the call.
+    ///
+    /// `timeout` is the tool's own; a `[[tool]] loop` without one has none.
+    pub(crate) async fn call_loop(
+        self: &Arc<Self>,
+        tool: &str,
+        spec: &LoopSpec,
+        args: &Value,
+        timeout: Option<Duration>,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<ToolResult> {
+        let Some(server) = self.server.upgrade() else {
+            anyhow::bail!("tool {tool}: the server is shutting down");
+        };
+        // How deep this loop already is; the child would be one deeper.
+        // Nothing but the implementation limit stops a policy whose second
+        // loop reads the same policy from recursing for ever (D-19: the
+        // limit is on the machine, not a check on the model).
+        let depth = self.loop_depth(server.as_ref());
+        if depth >= MAX_LOOP_DEPTH {
+            let message = format!("loop tool `{tool}`: nesting deeper than {MAX_LOOP_DEPTH}");
+            self.tool_warn(tool, message.clone());
+            anyhow::bail!("{message}");
+        }
+        // The spec's model, or this loop's own when it named none. A `model`
+        // that is there but cannot be resolved is a mistake in the file, so
+        // the call fails saying which model it was (the same line is a
+        // warning at load time, where `pirs check` shows it) rather than
+        // quietly running a review on a model nobody asked for.
+        let model = match spec.model.as_deref() {
+            Some(wanted) if !self.resolves_model(wanted) => anyhow::bail!("{}", unknown_model(tool, wanted)),
+            Some(wanted) => Some(ModelSpec { model: wanted.to_owned(), thinking: None }),
+            None => None,
+        };
+        let opts = CreateOptions {
+            cwd: self.cwd.clone(),
+            model: model.or_else(|| Some(self.model_spec())),
+            name: Some(format!("{}/{tool}", self.name.as_deref().unwrap_or(&self.id))),
+            session: None,
+            parent: Some(self.id.clone()),
+            socket: self.socket.clone(),
+        };
+        let child = match server.create_child(opts) {
+            Ok(child) => child,
+            Err(error) => anyhow::bail!("tool {tool}: cannot start the second loop: {}", create_error(&error)),
+        };
+        let (child_id, conversation) = (child.id.clone(), child.conversation.clone());
+        let prompt = process::interpolate_text(&spec.prompt, &loop_vars(args));
+        tracing::info!(loop_id = %self.id, child = %child_id, tool, "second loop started");
+        child.prompt(prompt, PromptWhen::Now);
+
+        let waited = {
+            let idle = child.wait_idle();
+            let bounded = async {
+                match timeout {
+                    Some(limit) => tokio::time::timeout(limit, idle).await.is_ok(),
+                    None => {
+                        idle.await;
+                        true
+                    }
+                }
+            };
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => None,
+                finished = bounded => Some(finished),
+            }
+        };
+        match waited {
+            // The parent was aborted or closed: the child goes with the
+            // call, but stays listed until its parent is closed.
+            None => {
+                child.abort();
+                anyhow::bail!("aborted");
+            }
+            Some(false) => {
+                child.abort();
+                let secs = timeout.unwrap_or_default().as_secs();
+                anyhow::bail!("tool {tool}: loop {child_id} did not answer within {secs}s");
+            }
+            Some(true) => {}
+        }
+
+        match child.last_detail().as_deref() {
+            Some(detail) if detail == "aborted" || detail == "closed" || detail.starts_with("error:") => {
+                anyhow::bail!("tool {tool}: loop {child_id} ended: {detail}")
+            }
+            _ => {}
+        }
+        let answer = child.last_assistant_text().unwrap_or_default();
+        if answer.trim().is_empty() {
+            anyhow::bail!("tool {tool}: loop {child_id} answered nothing");
+        }
+        // The parent's session log records which loop answered (and which
+        // conversation to read), next to the answer itself.
+        Ok(ToolResult::text(answer).with_details(json!({ "loop": child_id, "conversation": conversation })))
+    }
+
+    /// How many `parent` links stand above this loop: 0 for a loop a client
+    /// created, one more for every `[[tool]] loop` call in the chain. A
+    /// parent that is no longer in the server's table ends the walk.
+    fn loop_depth(&self, server: &dyn crate::agent_loop::ChildLoops) -> usize {
+        let mut depth = 0;
+        let mut parent = self.parent.clone();
+        while let Some(id) = parent {
+            let Some(handle) = server.find_loop(&id) else { break };
+            depth += 1;
+            if depth >= MAX_LOOP_DEPTH {
+                break;
+            }
+            parent = handle.parent.clone();
+        }
+        depth
+    }
+
+    /// One warning naming the `[[tool]]` entry, when there is one to name.
+    fn tool_warn(self: &Arc<Self>, tool: &str, message: String) {
+        match self.policy().tools.iter().find(|t| t.name == tool).and_then(|t| t.origins.first()) {
+            Some(origin) => self.policy_warn(origin, message),
+            None => self.ui_notify(NotifyLevel::Warning, message),
+        }
+    }
+}
+
+/// A `[[tool]] loop` prompt's variables: every argument the call carried,
+/// objects and arrays as compact JSON, so `$diff` and `${diff}` paste what
+/// the model sent (D-24's rules, without the command-line size limit).
+fn loop_vars(args: &Value) -> BTreeMap<String, String> {
+    let mut vars = BTreeMap::new();
+    if let Some(map) = args.as_object() {
+        for (key, value) in map {
+            vars.insert(key.clone(), process::env_value(value));
+        }
+    }
+    vars
+}
+
+/// Why a second loop could not be created, as one line for the model.
+fn create_error(error: &CreateError) -> String {
+    match error {
+        CreateError::NotFound(message) | CreateError::Invalid(message) => message.clone(),
+        CreateError::Internal(error) => format!("{error:#}"),
     }
 }
 
@@ -758,8 +961,10 @@ enum Backend {
     /// A declaration: the connected client that registered `tool.<name>`
     /// answers, with its registered timeout (D-23).
     Handler,
-    /// `loop = { … }`, which phase 5 fills in.
-    Loop,
+    /// `loop = { model, prompt, wait = "idle" }`: a second loop in the same
+    /// directory is created, prompted and waited for, and its final message
+    /// is the result ([`LoopHandle::call_loop`]).
+    Loop(LoopSpec),
 }
 
 /// A `[[tool]]` the policy defines: a called process, a declaration a
@@ -772,7 +977,9 @@ struct PolicyTool {
     snippet: Option<String>,
     guidelines: Vec<String>,
     backend: Backend,
-    timeout: Duration,
+    /// `None` is no limit; only a `[[tool]] loop` without an explicit
+    /// `timeout` has one.
+    timeout: Option<Duration>,
 }
 
 #[async_trait]
@@ -809,7 +1016,7 @@ impl AgentTool for PolicyTool {
         };
         let run = match &self.backend {
             Backend::Run(run) => run,
-            Backend::Loop => anyhow::bail!("tool {}: loop tools arrive in phase 5", self.name),
+            Backend::Loop(spec) => return handle.call_loop(&self.name, spec, &args, self.timeout, &cancel).await,
             Backend::Handler => {
                 // The registrant's timeout applies; an abort or close must
                 // not wait it out.
@@ -839,7 +1046,7 @@ impl AgentTool for PolicyTool {
             }
         }
         // Dropping the call — an abort — kills the process group (D-23).
-        let call = call_run(&spec, &request, &vars, &env, self.timeout);
+        let call = call_run(&spec, &request, &vars, &env, self.timeout.unwrap_or(dsl::DEFAULT_TOOL_TIMEOUT));
         let outcome = tokio::select! {
             biased;
             () = cancel.cancelled() => anyhow::bail!("aborted"),

@@ -78,7 +78,7 @@ A different major is refused with `-32000` and the connection is closed:
 | Request | Params | Result |
 |---|---|---|
 | `hello` | `client`, `protocol_version` | `server`, `protocol_version` |
-| `loop.create` | `cwd`, `model?`, `name?`, `session?` | `id`, `name?`, `cwd`, `model`, `state`, `since`, `conversation` |
+| `loop.create` | `cwd`, `model?`, `name?`, `session?` | `id`, `name?`, `cwd`, `model`, `state`, `since`, `conversation`, `parent?` |
 | `loop.list` | `cwd?` | `loops`, `conversations` |
 | `loop.attach` | `loop` | `loop`, `manifest`, `seq` |
 | `loop.close` | `loop` | `{}` |
@@ -101,7 +101,10 @@ A different major is refused with `-32000` and the connection is closed:
 
 That is the whole list. `model` is `{ model, thinking? }` with `thinking` one of `off`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `state` is `working` or `idle` — there
-is no third state. `when` is `now` (steer), `after_turn` or `next_input`.
+is no third state. `when` is `now` (steer), `after_turn` or `next_input`. `parent` is the
+loop that started this one with a `[[tool]] loop = { … }` call and is absent for every
+other loop; a client that lists loops can draw a loop under the one that asked it (S16),
+and `loop.close` on a parent closes its children with it.
 
 **Lifecycle.** `loop.create` starts a loop; `session` continues a stored conversation by id.
 
@@ -111,11 +114,12 @@ is no third state. `when` is `now` (steer), `after_turn` or `next_input`.
 ```
 
 `loop.list` lists running loops, and, when `cwd` is given, the conversations stored for that
-directory (most recent first); without `cwd`, `conversations` is empty.
+directory (most recent first); without `cwd`, `conversations` is empty. A loop a
+`[[tool]] loop` call started carries `parent`, so the list is a tree.
 
 ```json
 {"jsonrpc":"2.0","id":3,"method":"loop.list","params":{"cwd":"/home/me/proj"}}
-{"jsonrpc":"2.0","id":3,"result":{"conversations":[{"cwd":"/home/me/proj","id":"c-19f2","name":"review","path":"/home/me/.pirs/sessions/home-me-proj/c-19f2.jsonl","updated":1758412801000}],"loops":[{"conversation":"c-19f2","cwd":"/home/me/proj","id":"a7f3","model":{"model":"anthropic/claude-sonnet-4-5","thinking":"medium"},"name":"review","since":1758412800000,"state":"idle"}]}}
+{"jsonrpc":"2.0","id":3,"result":{"conversations":[{"cwd":"/home/me/proj","id":"c-19f2","name":"review","path":"/home/me/.pirs/sessions/home-me-proj/c-19f2.jsonl","updated":1758412801000}],"loops":[{"conversation":"c-19f2","cwd":"/home/me/proj","id":"a7f3","model":{"model":"anthropic/claude-sonnet-4-5","thinking":"medium"},"name":"review","since":1758412800000,"state":"idle"},{"conversation":"c-2a80","cwd":"/home/me/proj","id":"b104","model":{"model":"anthropic/claude-opus-4-1","thinking":"off"},"name":"a7f3/review","parent":"a7f3","since":1758412803000,"state":"working"}]}}
 ```
 
 `loop.attach` returns the loop, its merged manifest (`tools`, `commands`, `status_keys`,
@@ -129,7 +133,10 @@ event and then `subscribe { since: seq }` without a gap.
 
 **Driving a loop.** `loop.prompt` returns as soon as the prompt is accepted; the model's
 answer arrives as events, and the text passes through the `input` slot first. `loop.wait` is
-what a script or a subagent needs: its response arrives when the loop is idle.
+what a script or a subagent needs: its response arrives when the loop is idle, so `state`
+is always `idle`. It is what `pirs wait <loop>` sends (S17) and what the server itself
+waits for while a `[[tool]] loop` call runs. Waiting on an idle loop returns at once; it
+never starts anything.
 
 ```json
 {"jsonrpc":"2.0","id":5,"method":"loop.prompt","params":{"loop":"a7f3","text":"what changed?","when":"now"}}

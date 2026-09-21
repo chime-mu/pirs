@@ -198,6 +198,81 @@ async fn sidebar_lists_loops_with_states() {
     assert_eq!(harness.quit().await.unwrap(), 0);
 }
 
+// (1b) A loop another loop started is drawn under it, indented (S16).
+#[tokio::test]
+async fn a_child_loop_is_indented_under_its_parent() {
+    let mut child = loop_info("l2", "review", LoopState::Working);
+    child.parent = Some("l1".to_owned());
+    let mut orphan = loop_info("l3", "stray", LoopState::Idle);
+    orphan.parent = Some("gone".to_owned());
+    let state = State {
+        loops: vec![
+            loop_info("l1", "alpha", LoopState::Working),
+            child,
+            orphan,
+        ],
+        ..State::default()
+    };
+    let server = FakeServer::start(state).await;
+    let harness = start(&server, None).await;
+    let screen = wait(&harness, "all three agents", |s| {
+        sidebar_row(s, "review").is_some() && sidebar_row(s, "stray").is_some()
+    })
+    .await;
+
+    let parent = sidebar_row(&screen, "alpha ").expect("the parent row");
+    let child = sidebar_row(&screen, "review").expect("the child row");
+    let stray = sidebar_row(&screen, "stray").expect("the orphan row");
+    let indent = |row: &str| row.len() - row.trim_start_matches([' ', '>', '!']).len();
+    assert!(
+        indent(child) > indent(parent),
+        "the child is indented under its parent:\n{screen}"
+    );
+    assert_eq!(
+        indent(stray),
+        indent(parent),
+        "a child whose parent is not listed stays at the top level:\n{screen}"
+    );
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
+// (1c) `loop.list` is ordered by id, so a child can arrive before its
+// parent; the sidebar still draws it under the parent it is indented under.
+#[tokio::test]
+async fn a_child_whose_id_sorts_first_is_still_drawn_after_its_parent() {
+    let mut child = loop_info("a2", "review", LoopState::Working);
+    child.parent = Some("b1".to_owned());
+    let state = State {
+        // As `loop.list` sorts them: the child's id comes first.
+        loops: vec![child, loop_info("b1", "alpha", LoopState::Working)],
+        ..State::default()
+    };
+    let server = FakeServer::start(state).await;
+    let harness = start(&server, None).await;
+    let screen = wait(&harness, "both agents", |s| {
+        sidebar_row(s, "review").is_some() && sidebar_row(s, "alpha ").is_some()
+    })
+    .await;
+
+    let row_of = |label: &str| {
+        screen
+            .lines()
+            .position(|l| l.split('│').next().is_some_and(|s| s.contains(label)))
+            .expect("a sidebar row")
+    };
+    assert!(
+        row_of("alpha ") < row_of("review"),
+        "the parent is drawn above the child it owns:\n{screen}"
+    );
+    let indent = |row: &str| row.len() - row.trim_start_matches([' ', '>', '!']).len();
+    assert!(
+        indent(sidebar_row(&screen, "review").unwrap())
+            > indent(sidebar_row(&screen, "alpha ").unwrap()),
+        "and the child is still indented:\n{screen}"
+    );
+    assert_eq!(harness.quit().await.unwrap(), 0);
+}
+
 // (2) The attention flag: idle while unviewed sets it, viewing clears it,
 // working→idle sets it again.
 #[tokio::test]

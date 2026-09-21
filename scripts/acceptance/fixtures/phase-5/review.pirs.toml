@@ -1,0 +1,10 @@
+intent = """
+Give the model a `review` tool that asks a second agent, running the same faux model, to
+look at a piece of text and hand its verdict back.
+"""
+
+[[tool]]
+name = "review"
+description = "Ask a second loop to review the text"
+params.text = { type = "string", description = "What the second loop should review" }
+loop = { model = "faux/scripted", prompt = "Review this: $text", wait = "idle" }

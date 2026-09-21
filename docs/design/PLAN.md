@@ -77,6 +77,7 @@ design; changing one later needs no log entry.
 | socket path | `$XDG_RUNTIME_DIR/pirs.sock`, else `~/.pirs/pirs.sock`; `PIRS_SOCKET` overrides |
 | server idle exit | 10 minutes with no running loop and no attached client; `pirs serve --idle <secs>` |
 | handler timeout | 5 s for `input`, `prompt`, `tool_result`, `on.*`; `timeout` field per `[[tool]]`, default 60 s |
+| loop tool (`[[tool]] loop = …`) | no timeout unless `timeout` is written; `model` absent means the calling loop's model; an unresolvable `model` is an error result; nesting deeper than 8 is an error result (an implementation limit, not a check on the model) |
 | by-reference threshold | 64 KB |
 | session directory | `~/.pirs/sessions/<encoded cwd>/`; JSONL format as in `docs/session-format.md` plus a per-entry `seq`; pi compatibility of the *directory* is dropped with the rest of pi compatibility, the *format* stays |
 | loop identity | short random id; optional `name` at create; `--continue` alone picks the most recent conversation in the cwd, `--continue <name-or-id>` a specific one |

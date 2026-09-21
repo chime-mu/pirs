@@ -1,0 +1,6 @@
+[
+  {"toolCalls": [{"name": "review", "arguments": {"text": "the diff"}}]},
+  {"toolCalls": [{"name": "bash", "arguments": {"command": "sleep 2"}}]},
+  "CHILD-VERDICT: fine",
+  "parent says: done"
+]

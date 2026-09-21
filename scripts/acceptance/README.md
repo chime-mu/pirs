@@ -30,6 +30,15 @@ phase passes; every check prints one line.
   consuming `!`, `todo`'s widget in the manifest and on the wire, and `pi-ext` gone from
   `cargo metadata`.
 
+- `phase-5.sh` — several agents (S16, S17): a `[[tool]]` with
+  `loop = { model, prompt, wait = "idle" }` drives a second agent from one ordered faux
+  script — the parent's final message on stdout, the review toolResult in its session log
+  with the child's verdict and `details.loop`, `loop.list` showing the child with `parent`
+  set and named `parent/review`, the child's answer reaching the model itself (the faux
+  echo quotes it), `pirs wait <parent>` started before the prompt blocking for the whole
+  of a run the child spends two seconds on and then printing `idle` (and exiting 1 for an
+  agent that does not exist), and `loop.close` on the parent taking the child with it.
+
 `lib/raw.py` is the raw wire client the scripts use for the steps the `pirs` command does
 not expose: it says `hello`, sends each request line from stdin, prints every line the
 server sends back, and can stand in for a registered handler (`--reply tool.x=file`).

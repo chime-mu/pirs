@@ -28,7 +28,7 @@ use pirs_protocol::ThinkingLevel;
     subcommand_negates_reqs = true
 )]
 pub(crate) struct Cli {
-    /// `serve`, `stop`, `check` or `tui`; absent means print mode.
+    /// `serve`, `stop`, `check`, `wait` or `tui`; absent means print mode.
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 
@@ -118,6 +118,17 @@ pub(crate) enum Command {
     /// assembled system prompt. Exits 1 when anything conflicts, so a
     /// script can gate on it.
     Check,
+
+    /// Wait until an agent is idle, then exit (for scripts).
+    ///
+    /// The argument is a running agent's id or its name, as `pirs --list`
+    /// shows them. Prints the state the wait ended in; exits 0 when the
+    /// agent is idle and 1 when there is no such agent.
+    Wait {
+        /// The agent to wait for: its id or its name.
+        #[arg(value_name = "LOOP")]
+        target: String,
+    },
 
     /// The terminal UI: a sidebar of agents, one page each, files and
     /// widgets.
@@ -296,6 +307,27 @@ mod tests {
         assert!(with_cwd.command.is_none(), "{:?}", with_cwd.command);
         assert_eq!(with_cwd.run.prompt, ["check the build"]);
         assert_eq!(with_cwd.global.cwd, Some(PathBuf::from("/tmp/p")));
+    }
+
+    #[test]
+    fn wait_takes_one_agent_and_the_global_options() {
+        match parse(&["pirs", "wait", "a7f3"]).command {
+            Some(Command::Wait { target }) => assert_eq!(target, "a7f3"),
+            other => panic!("expected wait, got {other:?}"),
+        }
+        let cli = parse(&["pirs", "wait", "review", "--socket", "/tmp/s.sock", "--no-start"]);
+        match cli.command {
+            Some(Command::Wait { target }) => assert_eq!(target, "review"),
+            other => panic!("expected wait, got {other:?}"),
+        }
+        assert_eq!(cli.global.socket, Some(PathBuf::from("/tmp/s.sock")));
+        assert!(cli.global.no_start);
+        // The agent is required: `pirs wait` alone is an error, not a
+        // prompt.
+        assert!(Cli::try_parse_from(["pirs", "wait"]).is_err());
+        // A prompt that starts with the word is still a prompt.
+        let prompt = parse(&["pirs", "wait for the build"]);
+        assert!(prompt.command.is_none(), "{:?}", prompt.command);
     }
 
     #[test]

@@ -99,10 +99,13 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect, p: &Palette) {
             LoopState::Working => "working",
             LoopState::Idle => "idle",
         };
-        let label_width = width.saturating_sub(3 + 1 + state.len());
+        // A loop another loop started is drawn under it, one level of
+        // indent per ancestor in the list (S16).
+        let indent = "  ".repeat(app.agent_depth(i));
+        let label_width = width.saturating_sub(3 + 1 + state.len() + indent.len());
         let label = fit(agent.label(), label_width);
         let text = format!(
-            "{cursor}{flag} {label:<label_width$} {state}",
+            "{cursor}{flag} {indent}{label:<label_width$} {state}",
             label_width = label_width
         );
         let style = if selected {

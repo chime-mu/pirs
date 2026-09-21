@@ -53,6 +53,7 @@ fn a_loop() -> LoopInfo {
         state: LoopState::Idle,
         since: 17,
         conversation: "c1".to_owned(),
+        parent: None,
     }
 }
 
