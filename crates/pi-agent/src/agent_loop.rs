@@ -284,14 +284,7 @@ async fn prepare(
         return Prepared::Immediate { result: error_result("Operation aborted"), is_error: true };
     }
     if let Some(b) = before {
-        if b.block {
-            let mut result = error_result(b.reason.unwrap_or_else(|| "Tool execution was blocked".into()));
-            result.terminate = b.terminate;
-            return Prepared::Immediate { result, is_error: true };
-        }
-        if let Some(a) = b.args {
-            args = a;
-        }
+        args = b.args;
     }
     Prepared::Ready { tool, args }
 }

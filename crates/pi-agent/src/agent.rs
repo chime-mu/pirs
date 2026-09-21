@@ -59,7 +59,7 @@ impl AgentHooks for QueueHooks {
     async fn transform_context(&self, messages: Vec<AgentMessage>, cancel: &CancellationToken) -> Vec<AgentMessage> {
         self.inner.transform_context(messages, cancel).await
     }
-    async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>, cancel: &CancellationToken) -> Option<BeforeToolCallResult> {
+    async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>, cancel: &CancellationToken) -> Option<ToolCallArgs> {
         self.inner.before_tool_call(ctx, cancel).await
     }
     async fn after_tool_call(&self, ctx: AfterToolCallContext<'_>, cancel: &CancellationToken) -> Option<AfterToolCallResult> {

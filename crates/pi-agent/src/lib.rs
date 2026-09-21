@@ -39,12 +39,14 @@ mod tests {
         }
     }
 
-    struct Blocker;
+    /// A `before_tool_call` hook rewrites arguments; it cannot veto a call
+    /// (D-19), so a policy that objects redacts instead.
+    struct Redactor;
     #[async_trait]
-    impl AgentHooks for Blocker {
-        async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>, _c: &CancellationToken) -> Option<BeforeToolCallResult> {
+    impl AgentHooks for Redactor {
+        async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>, _c: &CancellationToken) -> Option<ToolCallArgs> {
             if ctx.args["text"] == "secret" {
-                return Some(BeforeToolCallResult { block: true, reason: Some("nope".into()), ..Default::default() });
+                return Some(ToolCallArgs { args: json!({"text": "redacted"}) });
             }
             None
         }
@@ -58,7 +60,7 @@ mod tests {
             json!({"text": "calling", "toolCalls": [{"name": "echo", "arguments": {"text": "hi"}}, {"name": "echo", "arguments": {"text": "secret"}}, {"name":"missing","arguments":{}}]}),
             json!("done"),
         ]);
-        let agent = Agent::new(model, Arc::new(Blocker));
+        let agent = Agent::new(model, Arc::new(Redactor));
         agent.set_tools(vec![Arc::new(Echo)]);
         let events: Arc<Mutex<Vec<String>>> = Default::default();
         let ev2 = events.clone();
@@ -73,8 +75,8 @@ mod tests {
         let results: Vec<&ToolResultMessage> = out.iter().filter_map(|m| if let AgentMessage::ToolResult(t) = m { Some(t) } else { None }).collect();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].content[0].as_text().unwrap(), "echo: hi");
-        assert!(results[1].is_error);
-        assert_eq!(results[1].content[0].as_text().unwrap(), "nope");
+        assert!(!results[1].is_error);
+        assert_eq!(results[1].content[0].as_text().unwrap(), "echo: redacted");
         assert!(results[2].is_error);
         let last = out.last().unwrap();
         if let AgentMessage::Assistant(a) = last {

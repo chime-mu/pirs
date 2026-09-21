@@ -55,6 +55,9 @@
 #![deny(unreachable_pub)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+// D-31: `clippy.toml` names the path methods a server-produced path may not
+// go through; each local-file exception carries its own allow.
+#![deny(clippy::disallowed_methods)]
 
 mod client;
 mod error;

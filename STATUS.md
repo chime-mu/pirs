@@ -35,7 +35,7 @@ pi-readable; the session *directory* does not.
 Test counts are the whole workspace at that phase. Phase 3 is lower than phase 2 because
 `pi-cli` and its 71 tests were deleted with the old interactive mode (D-04).
 
-Now: `cargo test --workspace` is **380 tests, 0 failures**, and all eight acceptance
+Now: `cargo test --workspace` is **381 tests, 0 failures**, and all eight acceptance
 scripts pass on this tree (117 checks in total).
 
 Scenario titles, from [`docs/design/10-functionality.md`](docs/design/10-functionality.md):

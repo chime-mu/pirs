@@ -263,13 +263,12 @@ pub type EventSink = Arc<dyn Fn(AgentEvent) -> futures::future::BoxFuture<'stati
 // Hooks
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default)]
-pub struct BeforeToolCallResult {
-    pub block: bool,
-    pub reason: Option<String>,
-    pub terminate: bool,
-    /// Replacement arguments (hooks may rewrite tool input).
-    pub args: Option<Value>,
+/// Replacement arguments from a `before_tool_call` hook: the tool is called
+/// with these instead of the ones the model produced. Hooks do not veto a
+/// call — a policy that refuses one refuses it in the tool (D-19).
+#[derive(Debug, Clone)]
+pub struct ToolCallArgs {
+    pub args: Value,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -304,7 +303,7 @@ pub trait AgentHooks: Send + Sync {
     async fn transform_context(&self, messages: Vec<AgentMessage>, _cancel: &CancellationToken) -> Vec<AgentMessage> {
         messages
     }
-    async fn before_tool_call(&self, _ctx: BeforeToolCallContext<'_>, _cancel: &CancellationToken) -> Option<BeforeToolCallResult> {
+    async fn before_tool_call(&self, _ctx: BeforeToolCallContext<'_>, _cancel: &CancellationToken) -> Option<ToolCallArgs> {
         None
     }
     async fn after_tool_call(&self, _ctx: AfterToolCallContext<'_>, _cancel: &CancellationToken) -> Option<AfterToolCallResult> {

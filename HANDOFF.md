@@ -22,7 +22,7 @@ extension docs with them. The workspace is `pi-ai`, `pi-agent`, `pirs-protocol`,
 | 5 Several agents | cec282d | 324 | `phase-5.sh` (12 checks) |
 | 6 Remote and contained servers | dfec48b | 354 | `phase-6.sh` (13 checks) |
 | 7 Intent tooling | 9b0c92d | 380 | `phase-7.sh` (27 checks) |
-| Final tidy | the last commit on the branch | 380 | all eight from a clean checkout |
+| Final tidy and review fixups | the last two commits on the branch | 381 | all eight from a clean checkout of the tidy commit; the fixup commit re-verified in place |
 
 Phase 3's total is lower than phase 2's because `pi-cli`'s 71 tests left with it.
 
@@ -125,6 +125,26 @@ for n in 0 1 2 3 4 5 6 7; do scripts/acceptance/phase-$n.sh; done
   entry can consume its prompt (the error message says so).
 - `cargo fmt --check` has never been clean on this repo; `pirs-protocol` and `pirs-tui`
   are, the older crates are not.
+- **Environment hooks**: `PIRS_SERVER_COMMAND` (what a client runs to auto-start a server),
+  `PIRS_TUI_TMUX` (a stand-in for `tmux` in tests), `PIRS_DOCS_DIR` (where the docs the
+  system prompt points at live; the server embeds `docs/dsl.md` and `docs/protocol.md` and
+  writes them under `<PIRS_HOME>/docs/` when no docs directory is found), `PIRS_FAUX_SCRIPT`
+  (server side), `PIRS_LOG`, `PIRS_SOCKET`, `PIRS_HOME`.
+
+## Where to look first when real use breaks
+
+Three places the final review ranked highest, none exercised beyond the faux provider and
+in-process fakes:
+
+1. **Live provider**: `crates/pirs-server/src/agent_loop.rs` (`resolve_startup_model`,
+   `get_api_key`, `stream_options`) and `crates/pi-ai/src/oauth.rs`. A credential error
+   becomes a `ui.notify` and an empty key.
+2. **Real terminal and editor**: `crates/pirs-tui/src/terminal.rs` and the editor pane in
+   `crates/pirs-tui/src/process.rs` (S14 is tested through a fake `tmux` only; the quoting
+   of a remote path passes through ssh's shell).
+3. **Real ssh**: `crates/pirs-client/src/{reconnect,spawn}.rs`; bridges were tested only
+   with `pirs proxy --socket` on one machine, never with latency or a half-open link. S20's
+   container was documented, never built.
 
 ## Known gaps and candidate decisions (not taken)
 

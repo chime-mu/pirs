@@ -78,6 +78,9 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
 /// Run the server until `shutdown` is cancelled or idle exit. What
 /// [`serve`] calls after wiring the signals; tests call it directly.
 pub async fn serve_until(opts: ServeOptions, shutdown: CancellationToken) -> anyhow::Result<()> {
+    // The `<docs>` section must name files that exist, which for an installed
+    // or jailed binary means the compiled-in copies under `$PIRS_HOME/docs`.
+    crate::system_prompt::install_embedded_docs();
     let socket = opts.socket.clone();
     prepare_socket_path(&socket).await?;
     let listener = UnixListener::bind(&socket).with_context(|| format!("binding {}", socket.display()))?;

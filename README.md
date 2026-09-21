@@ -169,6 +169,10 @@ echo '["Two plus two is four."]' > script.json
 PIRS_FAUX_SCRIPT=$PWD/script.json pirs --model faux/scripted "what is two plus two?"
 ```
 
+`PIRS_FAUX_SCRIPT` is read by the *server*, so the command above works only when it
+auto-starts one. Against a server that is already running, start that server with the
+variable instead: `PIRS_FAUX_SCRIPT=$PWD/script.json pirs serve`.
+
 ## Where things live
 
 `~/.pirs/` on the machine the server runs on (`PIRS_HOME` moves all of it):
@@ -196,7 +200,7 @@ down to the decision log.
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-scripts/acceptance/phase-0.sh        # … through phase-6.sh
+scripts/acceptance/phase-0.sh        # … through phase-7.sh
 ```
 
 Each `scripts/acceptance/phase-N.sh` is one phase's acceptance test and drives the real

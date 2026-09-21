@@ -92,7 +92,7 @@ recorded in the session log.
 
 ### `[[status]]` — one key in the status line
 
-`key` (required) · `run` (required) · `on` (events that refresh it)
+`key` (required) · `run` (required) · `on` (required: the events that refresh it)
 
 ```toml
 [[status]]
@@ -103,7 +103,7 @@ on = ["start", "turn_end"]
 
 ### `[[widget]]` — lines the UI shows beside the conversation
 
-`key` (required) · `file` or `run` · `on`
+`key` (required) · `file` or `run` · `on` (required: the events that refresh it)
 
 ```toml
 [[widget]]
@@ -137,7 +137,7 @@ its output is sent as `ui.status` (trimmed) or `ui.widget` (one entry per line).
 
 ### `[[command]]` — a `/name` the user can type
 
-`name` (required) · `description` (shown in the UI's command list) · `run`
+`name` (required) · `description` (required: shown in the UI's command list) · `run`
 
 ```toml
 [[command]]
@@ -321,9 +321,11 @@ string, `./x.sh` an executable. The same rule applies to `wrap`.
   `handled = true`: the input is consumed whatever the process does, because the file said
   so, and a failure is recorded as the command's output.
 - `timeout` is a `[[tool]]` field only, in seconds, default 60, and it bounds a process the
-  server spawns: an entry with neither `run` nor `wrap` may not set it. Every other slot uses
-  the server's fixed 5 s, and `[[on]]` is fire and forget with no timeout at all. On expiry the
-  handler counts as "no opinion" and the loop continues with a warning.
+  server spawns: the `run`, the `wrap` a built-in's call is routed through, or the second
+  loop a `loop` asks. A bare declaration — `params` with none of those — may not set it.
+  Every other slot uses the server's fixed 5 s, and `[[on]]` is fire and forget with no
+  timeout at all. On expiry the handler counts as "no opinion" and the loop continues with
+  a warning.
 - An executable `[[prompt]] run` is a `prompt` handler: it runs once the base system prompt
   is assembled (text, files and shell-string entries included), receives it whole as
   `{ system_prompt }`, and its `{ append }` lands under a `# <file>: [[prompt]] #n` line, or

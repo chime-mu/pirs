@@ -84,6 +84,12 @@ Nothing is published: the socket is reached with `docker exec`, which is what th
 `servers.toml` entry above does. Mount the project you want the agent to work on, and
 nothing else.
 
+The image needs no copy of the documentation: `docs/dsl.md` and `docs/protocol.md` are
+compiled into the binary, and the server writes them to `$PIRS_HOME/docs` at start when it
+finds no docs tree on disk, so the agent inside the jail can read them. `PIRS_DOCS_DIR`
+overrides that: point it at a directory holding a `docs/protocol.md` and the server uses
+that tree instead.
+
 With the container running, `pirs --server jail --list` shows its agents and `pirs tui`
 shows them in the sidebar.
 
