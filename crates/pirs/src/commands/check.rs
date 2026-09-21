@@ -27,7 +27,7 @@ pub(crate) async fn run(global: &GlobalArgs) -> Result<i32> {
 /// The whole report: files, manifest, the server's rendering of the merged
 /// policy (D-40), conflicts, then the system prompt verbatim under a line
 /// that separates it from everything above.
-fn format_check(result: &DslCheckResult) -> String {
+pub(crate) fn format_check(result: &DslCheckResult) -> String {
     let mut out = String::new();
 
     if result.files.is_empty() {

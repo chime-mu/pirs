@@ -51,6 +51,16 @@ phase passes; every check prints one line.
   bans and a clean `cargo clippy -p pirs-client -p pirs-tui` for paths staying opaque
   (D-31), and the Docker path documented rather than run.
 
+- `phase-7.sh` — intent tooling (S10): with a scripted faux body whose `intent` line
+  paraphrases the sentence, `pirs ext new "show the git branch in the status line"` writes
+  `.pirs/ext/show-the-git-branch-in-the-status-line.pirs.toml`, whose `intent` (read with
+  python3 `tomllib`) is the argument verbatim and whose `pirs check` is clean; `ext regen`
+  against a fresh server with the same script rebuilds it byte for byte and leaves a
+  `.bak`; a reply with no toml block in it exits 1 and writes nothing; and `--name custom`
+  picks the file name. The model is never named on a command line — a global
+  `[settings] model` makes the faux provider the loop's default, which is the model
+  `pirs ext new` uses.
+
 `lib/raw.py` is the raw wire client the scripts use for the steps the `pirs` command does
 not expose: it says `hello`, sends each request line from stdin, prints every line the
 server sends back, and can stand in for a registered handler (`--reply tool.x=file`).

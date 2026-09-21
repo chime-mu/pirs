@@ -1696,6 +1696,7 @@ dependencies = [
  "pirs-tui",
  "serde_json",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

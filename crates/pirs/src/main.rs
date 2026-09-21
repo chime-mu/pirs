@@ -7,8 +7,8 @@
 //!   auto-starts;
 //! - `pirs proxy` — the bridge a remote or contained server is reached
 //!   through;
-//! - `pirs stop`, `pirs --list`, `pirs check` and `pirs wait` — the small
-//!   administrative commands;
+//! - `pirs stop`, `pirs --list`, `pirs check`, `pirs wait` and `pirs ext` —
+//!   the small administrative commands;
 //! - `pirs tui` — the reference UI, a client of the server like any other.
 //!
 //! This file is argument parsing and dispatch; everything else is in
@@ -52,6 +52,7 @@ async fn dispatch(cli: Cli) -> i32 {
             commands::stop::run(global.server.as_deref(), global.socket.as_deref()).await
         }
         Some(Command::Check) => commands::check::run(&global).await,
+        Some(Command::Ext { command }) => commands::ext::run(command, &global).await,
         Some(Command::Wait { target }) => commands::wait::run(&target, &global).await,
         Some(Command::Tui { headless, config }) => {
             commands::tui::run(headless, config, &global).await

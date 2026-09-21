@@ -1,0 +1,3 @@
+[
+  "Here is the policy file you asked for.\n\n```toml\nintent = \"\"\"\nDisplay the current Git branch in the status bar and keep it fresh.\n\"\"\"\n\n[[status]]\nkey = \"branch\"\nrun = \"git branch --show-current\"\non = [\"start\", \"turn_end\"]\n```\n\nDrop it in `.pirs/ext/` and it is live on the next turn.\n"
+]

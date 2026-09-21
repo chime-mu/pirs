@@ -28,8 +28,8 @@ use pirs_protocol::ThinkingLevel;
     subcommand_negates_reqs = true
 )]
 pub(crate) struct Cli {
-    /// `serve`, `proxy`, `stop`, `check`, `wait` or `tui`; absent means
-    /// print mode.
+    /// `serve`, `proxy`, `stop`, `check`, `wait`, `ext` or `tui`; absent
+    /// means print mode.
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 
@@ -152,6 +152,21 @@ pub(crate) enum Command {
         target: String,
     },
 
+    /// Write a policy file from a sentence, or rebuild one from its own
+    /// intent.
+    ///
+    /// The convenience for when no agent is running (D-33): `ext new` asks
+    /// the model for one `*.pirs.toml` from `docs/dsl.md` and the sentence,
+    /// writes it under `<cwd>/.pirs/ext/`, and prints what `pirs check` would
+    /// print for the directory. `ext regen <file>` does the same from the
+    /// file's own `intent`, which is the shareable unit: the file is a cache
+    /// of it.
+    Ext {
+        /// `new` or `regen`.
+        #[command(subcommand)]
+        command: ExtCommand,
+    },
+
     /// The terminal UI: a sidebar of agents, one page each, files and
     /// widgets.
     ///
@@ -175,6 +190,49 @@ pub(crate) enum Command {
         /// The UI's configuration file (default: `~/.pirs/tui.toml`).
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
+    },
+}
+
+/// What `pirs ext` does: write a file from a sentence, or write it again.
+#[derive(Debug, Subcommand)]
+pub(crate) enum ExtCommand {
+    /// Write `<cwd>/.pirs/ext/<name>.pirs.toml` from a sentence.
+    ///
+    /// Several words are joined with spaces, so the quotes are optional.
+    /// The file's `intent` is the sentence verbatim, whatever the model
+    /// wrote, because `ext regen` rebuilds the file from it. Exits 1 when
+    /// the file does not parse or the check conflicts on it; the file is
+    /// left in place either way.
+    New {
+        /// The sentence: what the file is for, in your own words.
+        #[arg(value_name = "INTENT", required = true)]
+        intent: Vec<String>,
+
+        /// The file name, without `.pirs.toml` (default: a slug of the
+        /// intent).
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+
+        /// Model as `provider/id` (default: the loop's own).
+        #[arg(short = 'm', long, value_name = "SPEC")]
+        model: Option<String>,
+
+        /// Overwrite a file of that name instead of picking a free one.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Write a policy file again from its own `intent`.
+    ///
+    /// The file that is there is copied to `<file>.bak` first.
+    Regen {
+        /// The policy file to rebuild.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Model as `provider/id` (default: the loop's own).
+        #[arg(short = 'm', long, value_name = "SPEC")]
+        model: Option<String>,
     },
 }
 
@@ -399,6 +457,72 @@ mod tests {
         // A prompt that starts with the word is still a prompt.
         let prompt = parse(&["pirs", "wait for the build"]);
         assert!(prompt.command.is_none(), "{:?}", prompt.command);
+    }
+
+    #[test]
+    fn ext_new_takes_an_intent_a_name_a_model_and_the_global_options() {
+        match parse(&["pirs", "ext", "new", "show the git branch"]).command {
+            Some(Command::Ext {
+                command: ExtCommand::New { intent, name, model, force },
+            }) => {
+                assert_eq!(intent, ["show the git branch"]);
+                assert_eq!(name, None);
+                assert_eq!(model, None);
+                assert!(!force);
+            }
+            other => panic!("expected ext new, got {other:?}"),
+        }
+        // Unquoted words are joined by the command, as in print mode.
+        let cli = parse(&[
+            "pirs", "ext", "new", "--name", "custom", "-m", "faux/scripted", "--force", "--cwd",
+            "/tmp/p", "--no-start", "show", "the", "branch",
+        ]);
+        match cli.command {
+            Some(Command::Ext {
+                command: ExtCommand::New { intent, name, model, force },
+            }) => {
+                assert_eq!(intent, ["show", "the", "branch"]);
+                assert_eq!(name.as_deref(), Some("custom"));
+                assert_eq!(model.as_deref(), Some("faux/scripted"));
+                assert!(force);
+            }
+            other => panic!("expected ext new, got {other:?}"),
+        }
+        assert_eq!(cli.global.cwd, Some(PathBuf::from("/tmp/p")));
+        assert!(cli.global.no_start);
+        // An intent is required, and `ext` alone is not a command.
+        assert!(Cli::try_parse_from(["pirs", "ext", "new"]).is_err());
+        assert!(Cli::try_parse_from(["pirs", "ext"]).is_err());
+        // A prompt that starts with the word is still a prompt.
+        let prompt = parse(&["pirs", "ext new files"]);
+        assert!(prompt.command.is_none(), "{:?}", prompt.command);
+    }
+
+    #[test]
+    fn ext_regen_takes_one_file() {
+        match parse(&["pirs", "ext", "regen", ".pirs/ext/a.pirs.toml"]).command {
+            Some(Command::Ext {
+                command: ExtCommand::Regen { file, model },
+            }) => {
+                assert_eq!(file, PathBuf::from(".pirs/ext/a.pirs.toml"));
+                assert_eq!(model, None);
+            }
+            other => panic!("expected ext regen, got {other:?}"),
+        }
+        let cli = parse(&["pirs", "ext", "regen", "a.pirs.toml", "-m", "faux/scripted", "--server", "build"]);
+        match cli.command {
+            Some(Command::Ext {
+                command: ExtCommand::Regen { file, model },
+            }) => {
+                assert_eq!(file, PathBuf::from("a.pirs.toml"));
+                assert_eq!(model.as_deref(), Some("faux/scripted"));
+            }
+            other => panic!("expected ext regen, got {other:?}"),
+        }
+        assert_eq!(cli.global.server.as_deref(), Some("build"));
+        // One file, and it is required.
+        assert!(Cli::try_parse_from(["pirs", "ext", "regen"]).is_err());
+        assert!(Cli::try_parse_from(["pirs", "ext", "regen", "a", "b"]).is_err());
     }
 
     #[test]
