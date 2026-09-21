@@ -97,7 +97,7 @@ A different major is refused with `-32000` and the connection is closed:
 | `loop.tools` | `loop`, `names` | `{}` |
 | `loop.model` | `loop`, `spec` | `{}` |
 | `loop.reload` | `loop` | `files` |
-| `dsl.check` | `cwd` | `files`, `manifest`, `conflicts`, `system_prompt` |
+| `dsl.check` | `cwd` | `files`, `manifest`, `conflicts`, `rendered`, `system_prompt` |
 
 That is the whole list. `model` is `{ model, thinking? }` with `thinking` one of `off`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `state` is `working` or `idle` — there
@@ -199,14 +199,17 @@ is disabled for that loop. `loop.model` changes the model between turns.
 
 **Policy.** `loop.reload` re-reads the loop's policy files (the server also does this by
 itself after the loop's own tools write one). `dsl.check` runs the loader and checker where
-the files live and is what `pirs check` calls; `conflicts` name both files, and
-`system_prompt` is the fully assembled prompt with every rewrite applied.
+the files live and is what `pirs check` calls; `conflicts` name both files, `rendered` is
+the server's human-readable rendering of the composed policy — the files with their intents,
+the merged `[settings]` with the file each key came from, and every slot's entries with
+their origin, display text a client prints rather than parses (D-40) — and `system_prompt`
+is the fully assembled prompt with every rewrite applied.
 
 ```json
 {"jsonrpc":"2.0","id":22,"method":"loop.reload","params":{"loop":"a7f3"}}
 {"jsonrpc":"2.0","id":22,"result":{"files":["/home/me/.pirs/ext/git.pirs.toml","/home/me/proj/.pirs/ext/review.pirs.toml"]}}
 {"jsonrpc":"2.0","id":23,"method":"dsl.check","params":{"cwd":"/home/me/proj"}}
-{"jsonrpc":"2.0","id":23,"result":{"conflicts":[{"files":["/home/me/.pirs/ext/git.pirs.toml","/home/me/proj/.pirs/ext/review.pirs.toml"],"message":"duplicate command `review`"}],"files":["/home/me/proj/.pirs/ext/review.pirs.toml"],"manifest":{"commands":[{"description":"Review the working tree.","name":"review"}],"status_keys":["branch"],"tools":[{"description":"Run a shell command.","name":"bash","parameters":{"properties":{"command":{"type":"string"}},"required":["command"],"type":"object"}}],"widget_keys":["tests"]},"system_prompt":"You are pirs.\n"}}
+{"jsonrpc":"2.0","id":23,"result":{"conflicts":[{"files":["/home/me/.pirs/ext/git.pirs.toml","/home/me/proj/.pirs/ext/review.pirs.toml"],"message":"duplicate command `review`"}],"files":["/home/me/proj/.pirs/ext/review.pirs.toml"],"manifest":{"commands":[{"description":"Review the working tree.","name":"review"}],"status_keys":["branch"],"tools":[{"description":"Run a shell command.","name":"bash","parameters":{"properties":{"command":{"type":"string"}},"required":["command"],"type":"object"}}],"widget_keys":["tests"]},"rendered":"files:\n  /home/me/proj/.pirs/ext/review.pirs.toml\n    Review the working tree.\ninput:\n  ^/review\\b(.*) -> run \"git diff\", handled  (review.pirs.toml [[command]] #1)\n","system_prompt":"You are pirs.\n"}}
 ```
 
 ## Events (server → observers)
@@ -406,9 +409,21 @@ Four variables are in its environment:
 | `PIRS_SLOT` | the slot that fired, in its string form (`input`, `tool.fetch`, `on.turn_end`, …) |
 | `PIRS_SESSION_DIR` | the loop's session directory, where by-reference payloads live |
 
+A shell-string `run` additionally gets every top-level payload field as `PIRS_ARG_<field>`
+and as `$field` interpolation, so a one-liner never parses the JSON (D-24). A field larger
+than 64 KiB is on stdin only: the kernel refuses an `exec` over 128 KiB of environment and
+arguments, so such a field is left off `PIRS_ARG_*` and `$field` substitutes the empty
+string. `dsl.check` runs
+a `[[prompt]] run` the same way with an empty `PIRS_LOOP`, because there is no loop yet.
+
 A process that only answers its slot ignores all four. One that wants to steer the loop —
 emit `ui.status`, prompt another loop, register more slots — connects to `PIRS_SOCKET`, says
 `hello`, and is an ordinary client from then on.
+
+"Kills it when the loop closes" gives a process that was started a moment earlier — the
+`[[on]] event = "turn_end"` checkpoint of the run that just ended — a second to finish on
+its own first. Anything still running after that is asked to stop: its whole process group
+gets `SIGTERM`, and `SIGKILL` a second later if it is still there.
 
 ## Proposed, not yet accepted
 

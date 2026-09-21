@@ -361,3 +361,23 @@ returns the content of `path` whether it is a ref or an ordinary file, refusing 
 above a hard cap (16 MB, `INVALID_PARAMS`). The `{ ref, bytes }` form stays in the schema as
 the shape of a by-reference payload. Evidence: the phase 1 acceptance ("a >64 KB scripted tool
 result arrives as a `ref` and `fs.read` returns it") is satisfiable only this way.
+
+**D-40 · proposed · 2026-09-21 · `dsl.check` returns the rendered merged policy.**
+Recorded by the orchestrator during phase 2. S4 and `40-dsl.md` say `pirs check` prints the
+merged policy, every conflict, and the assembled system prompt. `DslCheckResult` carries
+`files`, `manifest`, `conflicts` and `system_prompt`; the manifest shows tools, commands and
+keys but not the `input`, `tool_result` and `on` rules, the `[settings]` table or the intents,
+so the client cannot print the merged result without re-implementing the loader. Add one
+field, `rendered: String`, the server's human-readable rendering of the composed policy
+(files in order with priority, each slot's entries with their origin, settings and their
+sources, intents). It is display text, not a second schema. Evidence: the phase 2 review found
+`dsl::render` had no production caller.
+
+**D-41 · proposed · 2026-09-21 · `[settings]` carries `tool_execution`.**
+Recorded by the orchestrator during phase 2. The plan folds `settings.json` into a
+`[settings]` table (open question 6 taken as yes) and names `model`, `thinking`, `tools`.
+`settings.json` also had `toolExecution` (`parallel` | `sequential`), which the loop server
+honours; dropping it would remove a capability rather than relocate it. The table therefore
+has four keys: `model`, `thinking`, `tools`, `tool_execution`. `deny_unknown_fields` keeps
+it closed. `settings.json` is no longer read; `models.json` (a provider catalogue, not a
+setting) still is.

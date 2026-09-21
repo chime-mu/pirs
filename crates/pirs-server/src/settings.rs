@@ -1,34 +1,52 @@
-//! Settings: `~/.pirs/settings.json` overlaid by `<cwd>/.pirs/settings.json`,
-//! plus `models.json` provider definitions.
+//! What a loop reads before it has a policy, and the `models.json` catalogue.
 //!
-//! Phase 2 replaces this file with the DSL's `[settings]` table, so the struct
-//! is deliberately small: only the keys the loop reads before any policy file
-//! is loaded.
+//! `settings.json` is gone: the DSL's `[settings]` table replaces it, so
+//! there is one loader and one checker (`40-dsl.md`, open question 6). This
+//! file is what is left of it — [`Settings`] is [`dsl::SettingsTable`] in the
+//! shape the loop uses, plus the two things that are not settings at all:
+//! the agent directory and the provider catalogue.
+//!
+//! `models.json` stays JSON and stays here. It is a provider catalogue —
+//! endpoints, ids, context windows — not a statement about how this loop
+//! should behave, and nothing in it belongs in a `.pirs.toml`.
 
-use serde::Deserialize;
-use serde_json::Value;
 use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::dsl::{SettingsTable, ToolExecution};
 
 /// The per-project configuration directory name.
 pub const CONFIG_DIR_NAME: &str = ".pirs";
 
-/// The settings the server reads before any policy file applies.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+/// The settings a loop starts with, from the merged `[settings]` tables of
+/// its policy files.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
-    /// Provider to use when `--model` names no provider.
-    pub default_provider: Option<String>,
-    /// Model to use when `--model` is absent.
+    /// `model`: what a loop runs when `--model` is absent. `provider/id` or
+    /// an id the registry resolves.
     pub default_model: Option<String>,
-    /// Thinking level to use when `--thinking` is absent.
+    /// `thinking`: how hard it thinks when `--thinking` is absent.
     pub default_thinking_level: Option<String>,
-    /// `"sequential"` runs tool calls one at a time; anything else is parallel.
-    pub tool_execution: Option<String>,
-    /// Model keys a UI offers; empty means "all of them".
-    pub enabled_models: Vec<String>,
-    /// The merged JSON, for keys this struct does not name.
-    #[serde(skip)]
-    pub raw: Value,
+    /// `tools`: the tools the model is offered; `None` is the server's
+    /// default selection.
+    pub tools: Option<Vec<String>>,
+    /// `tool_execution`: whether a turn's tool calls run together or one at
+    /// a time; `None` is parallel, as `settings.json` defaulted.
+    pub tool_execution: Option<ToolExecution>,
+}
+
+impl Settings {
+    /// The loop's view of a merged `[settings]` table.
+    pub fn from_policy(table: &SettingsTable) -> Self {
+        Settings {
+            default_model: table.model.clone(),
+            default_thinking_level: table.thinking.clone(),
+            tools: table.tools.clone(),
+            tool_execution: table.tool_execution,
+        }
+    }
+
 }
 
 /// `$PIRS_HOME` or `~/.pirs`.
@@ -39,33 +57,6 @@ pub fn agent_dir() -> PathBuf {
 fn read_json(path: &Path) -> Option<Value> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
-}
-
-fn merge(base: &mut Value, over: Value) {
-    match (base, over) {
-        (Value::Object(b), Value::Object(o)) => {
-            for (k, v) in o {
-                match b.get_mut(&k) {
-                    Some(existing) if existing.is_object() && v.is_object() => merge(existing, v),
-                    _ => {
-                        b.insert(k, v);
-                    }
-                }
-            }
-        }
-        (b, o) => *b = o,
-    }
-}
-
-/// Load `~/.pirs/settings.json`, then overlay `<cwd>/.pirs/settings.json`.
-pub fn load_settings(cwd: &Path) -> Settings {
-    let mut raw = read_json(&agent_dir().join("settings.json")).unwrap_or_else(|| Value::Object(Default::default()));
-    if let Some(project) = read_json(&cwd.join(CONFIG_DIR_NAME).join("settings.json")) {
-        merge(&mut raw, project);
-    }
-    let mut settings: Settings = serde_json::from_value(raw.clone()).unwrap_or_default();
-    settings.raw = raw;
-    settings
 }
 
 /// Apply `~/.pirs/models.json` and `<cwd>/.pirs/models.json` to the registry.
@@ -82,42 +73,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_settings_overlay_the_home_ones() {
+    fn settings_come_from_the_policy_table() {
+        let table = SettingsTable {
+            model: Some("anthropic/claude-sonnet-4-5".to_owned()),
+            thinking: Some("high".to_owned()),
+            tools: Some(vec!["read".to_owned(), "bash".to_owned()]),
+            tool_execution: Some(ToolExecution::Sequential),
+        };
+        let settings = Settings::from_policy(&table);
+        assert_eq!(settings.default_model.as_deref(), Some("anthropic/claude-sonnet-4-5"));
+        assert_eq!(settings.default_thinking_level.as_deref(), Some("high"));
+        assert_eq!(settings.tools.as_deref(), Some(["read".to_owned(), "bash".to_owned()].as_slice()));
+        assert_eq!(settings.tool_execution, Some(ToolExecution::Sequential));
+    }
+
+    #[test]
+    fn a_directory_with_no_policy_files_has_no_settings() {
         let home = tempfile::tempdir().expect("tempdir");
         let project = tempfile::tempdir().expect("tempdir");
         crate::session::tests_support::with_pirs_home(home.path(), || {
-            std::fs::create_dir_all(agent_dir()).expect("agent dir");
-            std::fs::write(
-                agent_dir().join("settings.json"),
-                r#"{"defaultModel":"a","defaultProvider":"anthropic","enabledModels":["a"],"extra":{"x":1}}"#,
-            )
-            .expect("write");
-            std::fs::create_dir_all(project.path().join(CONFIG_DIR_NAME)).expect("project dir");
-            std::fs::write(
-                project.path().join(CONFIG_DIR_NAME).join("settings.json"),
-                r#"{"defaultModel":"b","toolExecution":"sequential","extra":{"y":2}}"#,
-            )
-            .expect("write");
-
-            let s = load_settings(project.path());
-            assert_eq!(s.default_model.as_deref(), Some("b"));
-            assert_eq!(s.default_provider.as_deref(), Some("anthropic"));
-            assert_eq!(s.tool_execution.as_deref(), Some("sequential"));
-            assert_eq!(s.enabled_models, ["a"]);
-            // Objects merge rather than replace, and unnamed keys survive in `raw`.
-            assert_eq!(s.raw["extra"]["x"], 1);
-            assert_eq!(s.raw["extra"]["y"], 2);
+            assert_eq!(Settings::from_policy(&crate::dsl::load(project.path()).settings), Settings::default());
         });
     }
 
     #[test]
-    fn missing_files_give_defaults() {
+    fn a_projects_settings_table_reaches_the_loop() {
         let home = tempfile::tempdir().expect("tempdir");
         let project = tempfile::tempdir().expect("tempdir");
         crate::session::tests_support::with_pirs_home(home.path(), || {
-            let s = load_settings(project.path());
-            assert!(s.default_model.is_none());
-            assert!(s.enabled_models.is_empty());
+            let ext = project.path().join(CONFIG_DIR_NAME).join("ext");
+            std::fs::create_dir_all(&ext).expect("ext dir");
+            std::fs::write(
+                ext.join("a.pirs.toml"),
+                "intent = \"pick a model\"\n[settings]\nmodel = \"faux/scripted\"\nthinking = \"low\"\ntool_execution = \"sequential\"\n",
+            )
+            .expect("write");
+            let settings = Settings::from_policy(&crate::dsl::load(project.path()).settings);
+            assert_eq!(settings.default_model.as_deref(), Some("faux/scripted"));
+            assert_eq!(settings.default_thinking_level.as_deref(), Some("low"));
+            assert!(settings.tools.is_none());
+            assert_eq!(settings.tool_execution, Some(ToolExecution::Sequential));
         });
     }
 }

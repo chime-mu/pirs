@@ -559,6 +559,10 @@
           "description": "The merged manifest.",
           "$ref": "#/$defs/Manifest"
         },
+        "rendered": {
+          "description": "The server's human-readable rendering of the composed policy: the\nfiles with their intents, the merged `[settings]` and where each key\ncame from, and every slot's entries with their origin. Display text,\nnot a second schema — a client prints it, it does not parse it (D-40).",
+          "type": "string"
+        },
         "system_prompt": {
           "description": "The fully assembled system prompt, with every rewrite applied and\nvisible (D-21).",
           "type": "string"
@@ -568,6 +572,7 @@
         "files",
         "manifest",
         "conflicts",
+        "rendered",
         "system_prompt"
       ]
     },

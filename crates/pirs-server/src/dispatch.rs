@@ -142,8 +142,11 @@ impl LoopHandle {
         self.ui_notify(NotifyLevel::Warning, text);
     }
 
-    /// Run the `input` handlers over a prompt. `None` means it was consumed.
-    pub(crate) async fn dispatch_input(&self, mut text: String) -> Option<String> {
+    /// Run the `input` slot over a prompt: the policy's own `[[input]]`
+    /// entries first, in file order, then the registered handlers in
+    /// registration order. `None` means it was consumed.
+    pub(crate) async fn dispatch_input(self: &Arc<Self>, text: String) -> Option<String> {
+        let mut text = self.dsl_input(text).await?;
         for reg in self.registrations_for(&Slot::Input) {
             match self.call_slot(&reg, SlotRequest::Input(InputPayload { text: text.clone() })).await {
                 Some(SlotReply::Input(InputReply::Text { text: t })) => text = t,
@@ -154,7 +157,9 @@ impl LoopHandle {
         Some(text)
     }
 
-    /// Run the `prompt` handlers over the assembled system prompt.
+    /// Run the registered `prompt` handlers over the assembled system
+    /// prompt. The policy's own `[[prompt]]` entries are already in it: they
+    /// are the `<policy>` section of the base prompt (D-21).
     pub(crate) async fn dispatch_prompt(&self, mut prompt: String) -> String {
         for reg in self.registrations_for(&Slot::Prompt) {
             match self.call_slot(&reg, SlotRequest::Prompt(PromptPayload { system_prompt: prompt.clone() })).await {
@@ -171,10 +176,21 @@ impl LoopHandle {
         prompt
     }
 
-    /// Run the `tool_result` handlers. `Some((result, by))` when at least one
-    /// rewrote it, `by` naming the last handler that did.
-    pub(crate) async fn dispatch_tool_result(&self, tool: &str, args: &Value, mut result: ToolReply) -> Option<(ToolReply, String)> {
-        let mut by: Option<String> = None;
+    /// Run the `tool_result` slot: the policy's `[[tool_result]]` entries
+    /// for this tool in file order, then the registered handlers, each
+    /// seeing the previous one's result. `Some((result, by))` when at least
+    /// one rewrote it, `by` naming the last that did.
+    pub(crate) async fn dispatch_tool_result(
+        self: &Arc<Self>,
+        tool: &str,
+        args: &Value,
+        result: ToolReply,
+    ) -> Option<(ToolReply, String)> {
+        let from_policy = self.dsl_tool_result(tool, args, result.clone()).await;
+        let (mut result, mut by) = match from_policy {
+            Some((result, by)) => (result, Some(by)),
+            None => (result, None),
+        };
         for reg in self.registrations_for(&Slot::ToolResult) {
             let payload = ToolResultPayload { tool: tool.to_owned(), args: args.clone(), result: result.clone() };
             if let Some(SlotReply::ToolResult(ToolResultReply { result: r })) =
@@ -200,8 +216,11 @@ impl LoopHandle {
         }
     }
 
-    /// Send an `on.<event>` notification to every handler of it. Never waited for.
-    pub(crate) fn notify_on(&self, payload: OnPayload) {
+    /// Fire an `on.<event>`: the policy's `[[on]]` entries (and the
+    /// `[[status]]` and `[[widget]]` ones that desugared to them) first,
+    /// then a notification to every registered handler. Never waited for.
+    pub(crate) fn notify_on(self: &Arc<Self>, payload: OnPayload) {
+        self.fire_dsl_on(&payload);
         let slot = Slot::On(payload.event());
         let regs = self.registrations_for(&slot);
         if regs.is_empty() {

@@ -10,8 +10,10 @@
 //!   per-entry `seq` (D-06), with branching, forking and compaction.
 //! - [`tools`] — the built-in tools (`read`, `bash`, `edit`, `write`, `grep`,
 //!   `find`, `ls`) as [`pi_agent::AgentTool`] implementations.
-//! - [`settings`] — `~/.pirs/settings.json` overlaid by `<cwd>/.pirs/settings.json`
-//!   (phase 2 replaces this with the DSL's `[settings]` table).
+//! - [`settings`] — what the loop reads before it has a policy: the DSL's
+//!   `[settings]` table, and the `models.json` provider catalogue.
+//! - [`dsl`] — policy files: locating, parsing, desugaring, composing and
+//!   checking `*.pirs.toml` (D-17, D-18).
 //! - [`system_prompt`] — the system prompt builder and `AGENTS.md` discovery.
 //! - `process` (private) — the only module allowed to construct a child
 //!   process (D-09).
@@ -25,6 +27,8 @@
 //!   log entries and events.
 //! - `dispatch` — handler registrations (D-23) and the slot request path with
 //!   timeouts.
+//! - `policy` — the DSL at runtime: what the loop does with the entries it
+//!   loaded, in front of the registered handlers of the same slot.
 //! - `log` — the session log as the sequenced event stream (D-06): every
 //!   sequenced event is a log entry, replay walks the log, by-reference
 //!   payloads (D-11, D-39).
@@ -37,6 +41,7 @@
 // carries the only allow.
 #![deny(clippy::disallowed_methods)]
 
+pub mod dsl;
 pub mod server;
 pub mod session;
 pub mod settings;
@@ -48,6 +53,7 @@ mod convert;
 mod dispatch;
 mod fs;
 mod log;
+mod policy;
 mod process;
 
 pub use server::{serve, serve_until, ServeOptions};

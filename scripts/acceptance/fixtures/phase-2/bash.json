@@ -1,0 +1,4 @@
+[
+  { "text": "running it. ", "toolCalls": [{ "name": "bash", "arguments": { "command": "echo raw-output" } }] },
+  "that is all"
+]

@@ -1,0 +1,6 @@
+intent = "Claim the branch status key, and clash with two.pirs.toml on purpose."
+
+[[status]]
+key = "branch"
+run = "echo one"
+on = ["start"]

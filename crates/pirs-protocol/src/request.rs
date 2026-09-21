@@ -534,6 +534,11 @@ pub struct DslCheckResult {
     pub manifest: Manifest,
     /// Conflicts, each naming both files. Empty when the policy is clean.
     pub conflicts: Vec<DslConflict>,
+    /// The server's human-readable rendering of the composed policy: the
+    /// files with their intents, the merged `[settings]` and where each key
+    /// came from, and every slot's entries with their origin. Display text,
+    /// not a second schema — a client prints it, it does not parse it (D-40).
+    pub rendered: String,
     /// The fully assembled system prompt, with every rewrite applied and
     /// visible (D-21).
     pub system_prompt: String,

@@ -5,7 +5,8 @@
 //! - print mode (`pirs "prompt"`) — [`print`], the whole of S1 and S2;
 //! - `pirs serve` — the loop server in this process, and what a client
 //!   auto-starts;
-//! - `pirs stop` and `pirs --list` — the small administrative commands;
+//! - `pirs stop`, `pirs --list` and `pirs check` — the small
+//!   administrative commands;
 //! - `pirs tui` — the old in-process interactive mode, a phase 1-3 stopgap.
 //!
 //! This file is argument parsing and dispatch; everything else is in
@@ -39,19 +40,18 @@ fn main() {
 
 /// Run the chosen command and turn its error into an exit code.
 async fn dispatch(cli: Cli) -> i32 {
+    let global = cli.global;
     let result = match cli.command {
-        Some(Command::Serve { idle, socket }) => commands::serve::run(idle, socket.as_deref()).await,
-        Some(Command::Stop { socket }) => commands::stop::run(socket.as_deref()).await,
+        Some(Command::Serve { idle }) => commands::serve::run(idle, global.socket.as_deref()).await,
+        Some(Command::Stop) => commands::stop::run(global.socket.as_deref()).await,
+        Some(Command::Check) => {
+            commands::check::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
+        }
         Some(Command::Tui { args }) => commands::tui::run(args).await,
         None if cli.run.list => {
-            commands::list::run(
-                cli.run.cwd.as_deref(),
-                cli.run.socket.as_deref(),
-                cli.run.no_start,
-            )
-            .await
+            commands::list::run(global.cwd.as_deref(), global.socket.as_deref(), global.no_start).await
         }
-        None => print::run(cli.run).await,
+        None => print::run(cli.run, global).await,
     };
     match result {
         Ok(code) => code,

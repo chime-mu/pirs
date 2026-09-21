@@ -30,8 +30,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context as _};
 use pirs_protocol::{
-    code, DslCheckResult, Empty, Envelope, Frame, FrameError, HelloResult, Id, LoopAttachResult, LoopListResult,
-    LoopSelector, LoopState, LoopWaitResult, Manifest, Request, RpcError, RpcRequest, RpcResponse, Slot, PROTOCOL_VERSION,
+    code, Empty, Envelope, Frame, FrameError, HelloResult, Id, LoopAttachResult, LoopListResult, LoopSelector,
+    LoopState, LoopWaitResult, Request, RpcError, RpcRequest, RpcResponse, Slot, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -43,8 +43,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent_loop::{CreateError, CreateOptions, LoopHandle};
 use crate::log::{StarSubscribers, Subscriber};
 use crate::session::SessionManager;
-use crate::system_prompt::{build_system_prompt, load_context_files, BuildSystemPromptOptions};
-use crate::{convert, fs, tools};
+use crate::fs;
 
 /// How to run the server.
 #[derive(Debug, Clone)]
@@ -88,7 +87,7 @@ pub async fn serve_until(opts: ServeOptions, shutdown: CancellationToken) -> any
         .with_context(|| format!("writing {}", pid_file.display()))?;
     tracing::info!(socket = %socket.display(), idle_secs = opts.idle.as_secs_f64(), "pirs server listening");
 
-    let server = Arc::new(Server::new(opts.idle, shutdown.clone()));
+    let server = Arc::new(Server::new(socket.clone(), opts.idle, shutdown.clone()));
     let idle_watch = tokio::spawn(server.clone().idle_watch());
     loop {
         tokio::select! {
@@ -237,6 +236,9 @@ impl Connection {
 }
 
 pub(crate) struct Server {
+    /// The socket this server listens on; every process a loop calls is told
+    /// where it is (`PIRS_SOCKET`).
+    socket: PathBuf,
     loops: Mutex<HashMap<String, Arc<LoopHandle>>>,
     connections: Mutex<HashMap<u64, Arc<Connection>>>,
     star: StarSubscribers,
@@ -247,8 +249,9 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    fn new(idle: Duration, shutdown: CancellationToken) -> Self {
+    fn new(socket: PathBuf, idle: Duration, shutdown: CancellationToken) -> Self {
         Server {
+            socket,
             loops: Mutex::new(HashMap::new()),
             connections: Mutex::new(HashMap::new()),
             star: StarSubscribers::default(),
@@ -510,6 +513,7 @@ impl Server {
                     model: p.model,
                     name: p.name,
                     session: p.session,
+                    socket: self.socket.clone(),
                 };
                 let handle = LoopHandle::create(id.clone(), opts, self.star.clone()).map_err(|e| match e {
                     CreateError::NotFound(m) => RpcError::new(code::NOT_FOUND, m),
@@ -632,13 +636,14 @@ impl Server {
                 empty()
             }
             Request::LoopReload(p) => {
-                let files = self.get_loop(&p.loop_id)?.reload().map_err(|m| RpcError::new(code::BUSY, m))?;
+                let files =
+                    self.get_loop(&p.loop_id)?.reload().await.map_err(|m| RpcError::new(code::BUSY, m))?;
                 ok(pirs_protocol::LoopReloadResult { files })
             }
             Request::DslCheck(p) => {
                 let cwd = std::fs::canonicalize(p.cwd.as_str())
                     .map_err(|e| RpcError::new(code::INVALID_PARAMS, format!("cwd {}: {e}", p.cwd)))?;
-                ok(dsl_check(&cwd))
+                ok(crate::policy::check(&cwd, &self.socket).await)
             }
         }
     }
@@ -655,25 +660,4 @@ enum Dispatch {
     Spawned,
 }
 
-/// `dsl.check` this phase: no policy files exist yet, so the result is the
-/// built-in manifest and the system prompt a fresh loop in `cwd` would get.
-/// Phase 2 fills in `files` and `conflicts`.
-fn dsl_check(cwd: &Path) -> DslCheckResult {
-    let all = tools::builtin_tools(cwd);
-    let selected: Vec<String> = tools::DEFAULT_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
-    let chosen: Vec<_> = all.iter().filter(|t| selected.contains(&t.name())).collect();
-    let options = BuildSystemPromptOptions {
-        cwd: cwd.to_string_lossy().into_owned(),
-        context_files: load_context_files(cwd),
-        selected_tools: chosen.iter().map(|t| t.name()).collect(),
-        tool_snippets: chosen.iter().filter_map(|t| t.prompt_snippet().map(|s| (t.name(), s))).collect(),
-        tool_guidelines: chosen.iter().map(|t| (t.name(), t.prompt_guidelines())).filter(|(_, g)| !g.is_empty()).collect(),
-        ..Default::default()
-    };
-    DslCheckResult {
-        files: Vec::new(),
-        manifest: Manifest { tools: all.iter().map(convert::tool_info).collect(), ..Default::default() },
-        conflicts: Vec::new(),
-        system_prompt: build_system_prompt(&options),
-    }
-}
+

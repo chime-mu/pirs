@@ -1,0 +1,4 @@
+intent = "Not valid TOML, so the loop warns and keeps going."
+
+[[input
+match = "oops"

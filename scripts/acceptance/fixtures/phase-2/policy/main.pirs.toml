@@ -1,0 +1,43 @@
+intent = """
+Give me brief answers with ?, run a shell command with !, show the branch in the
+status line, check a point in after every turn, trim bash output, and add a
+/handoff command. The phase-2 acceptance fixture: one file, every slot.
+"""
+
+# A prompt file: the model always gets these rules.
+[[prompt]]
+files = "rules/*.md"
+
+# An input rewrite: ?x becomes a request for a brief answer.
+[[input]]
+match = '^\?(.*)'
+replace = "Explain briefly: $1"
+
+# A shell shortcut: !cmd runs and never reaches the model.
+[[input]]
+match = '^!(.*)'
+handled = true
+run = "$1"
+
+# A status command.
+[[status]]
+key = "branch"
+run = "echo main"
+on = ["start", "turn_end"]
+
+# Something that runs when something happens.
+[[on]]
+event = "turn_end"
+run = "touch checkpoint"
+quiet = true
+
+# A rewrite of what the model reads back from a tool.
+[[tool_result]]
+tool = "bash"
+run = "echo \"rewritten: $PIRS_ARG_tool\""
+
+# A slash command of my own.
+[[command]]
+name = "handoff"
+description = "Start a fresh session with a summary"
+run = "echo handoff-ran $args"

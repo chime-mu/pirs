@@ -20,7 +20,11 @@ use pirs_protocol::ThinkingLevel;
                   and closes the agent when it exits; the conversation stays on disk and \
                   `--continue` starts a fresh agent on it. A loop server is started for \
                   you if none is running, and exits by itself when it has been idle.",
-    args_conflicts_with_subcommands = true,
+    // Not `args_conflicts_with_subcommands`: clap stops looking for a
+    // subcommand once that is set and any argument has been seen, so
+    // `pirs --cwd DIR check` would be the *prompt* "check". A subcommand name
+    // is still only recognised before the prompt begins, so
+    // `pirs "check the build"` stays a prompt.
     subcommand_negates_reqs = true
 )]
 pub(crate) struct Cli {
@@ -31,6 +35,28 @@ pub(crate) struct Cli {
     /// Print mode and `--list`.
     #[command(flatten)]
     pub(crate) run: RunArgs,
+
+    /// The options every mode takes.
+    #[command(flatten)]
+    pub(crate) global: GlobalArgs,
+}
+
+/// The options that mean the same thing in every mode, so they are accepted
+/// on either side of a subcommand: `pirs --cwd DIR check` and
+/// `pirs check --cwd DIR` are the same line.
+#[derive(Debug, clap::Args)]
+pub(crate) struct GlobalArgs {
+    /// Working directory for the agent (default: the current one).
+    #[arg(long, global = true, value_name = "DIR")]
+    pub(crate) cwd: Option<PathBuf>,
+
+    /// The server's unix socket; overrides `PIRS_SOCKET`.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) socket: Option<PathBuf>,
+
+    /// Fail instead of starting a server when none is listening.
+    #[arg(long, global = true)]
+    pub(crate) no_start: bool,
 }
 
 /// Everything `pirs [OPTIONS] [PROMPT]...` takes.
@@ -47,10 +73,6 @@ pub(crate) struct RunArgs {
     /// How hard the model thinks: off, minimal, low, medium, high, xhigh, max.
     #[arg(long, value_name = "LEVEL", value_parser = parse_thinking)]
     pub(crate) thinking: Option<ThinkingLevel>,
-
-    /// Working directory for the agent (default: the current one).
-    #[arg(long, value_name = "DIR")]
-    pub(crate) cwd: Option<PathBuf>,
 
     /// Name the conversation, so `--continue=<name>` can find it later.
     #[arg(long, value_name = "NAME")]
@@ -73,14 +95,6 @@ pub(crate) struct RunArgs {
     /// List running agents, then this directory's conversations, and exit.
     #[arg(long)]
     pub(crate) list: bool,
-
-    /// The server's unix socket; overrides `PIRS_SOCKET`.
-    #[arg(long, value_name = "PATH")]
-    pub(crate) socket: Option<PathBuf>,
-
-    /// Fail instead of starting a server when none is listening.
-    #[arg(long)]
-    pub(crate) no_start: bool,
 }
 
 /// The subcommands. Print mode is the absent one.
@@ -93,17 +107,17 @@ pub(crate) enum Command {
         /// Exit after this many seconds with no working agent and no client.
         #[arg(long, value_name = "SECS", default_value_t = 600)]
         idle: u64,
-        /// The unix socket to listen on; overrides `PIRS_SOCKET`.
-        #[arg(long, value_name = "PATH")]
-        socket: Option<PathBuf>,
     },
 
     /// Close the running agents and stop the server.
-    Stop {
-        /// The server's unix socket; overrides `PIRS_SOCKET`.
-        #[arg(long, value_name = "PATH")]
-        socket: Option<PathBuf>,
-    },
+    Stop,
+
+    /// Print the policy a loop in this directory would start with.
+    ///
+    /// The merged files, the manifest, every conflict, and the fully
+    /// assembled system prompt. Exits 1 when anything conflicts, so a
+    /// script can gate on it.
+    Check,
 
     /// The old in-process interactive mode: a phase 1-3 stopgap.
     ///
@@ -170,13 +184,13 @@ mod tests {
             "hi",
             "there",
         ]);
-        let run = cli.run;
+        let (run, global) = (cli.run, cli.global);
         assert_eq!(run.model.as_deref(), Some("faux/scripted"));
         assert_eq!(run.thinking, Some(ThinkingLevel::High));
-        assert_eq!(run.cwd, Some(PathBuf::from("/tmp/p")));
+        assert_eq!(global.cwd, Some(PathBuf::from("/tmp/p")));
         assert_eq!(run.name.as_deref(), Some("api work"));
-        assert_eq!(run.socket, Some(PathBuf::from("/tmp/s.sock")));
-        assert!(run.no_start);
+        assert_eq!(global.socket, Some(PathBuf::from("/tmp/s.sock")));
+        assert!(global.no_start);
         assert_eq!(run.prompt, ["hi", "there"]);
     }
 
@@ -200,33 +214,63 @@ mod tests {
     fn list_takes_a_cwd() {
         let cli = parse(&["pirs", "--list", "--cwd", "/tmp/p"]);
         assert!(cli.run.list);
-        assert_eq!(cli.run.cwd, Some(PathBuf::from("/tmp/p")));
+        assert_eq!(cli.global.cwd, Some(PathBuf::from("/tmp/p")));
     }
 
     #[test]
     fn serve_defaults_to_ten_minutes_idle() {
-        match parse(&["pirs", "serve"]).command {
-            Some(Command::Serve { idle, socket }) => {
-                assert_eq!(idle, 600);
-                assert!(socket.is_none());
-            }
+        let cli = parse(&["pirs", "serve"]);
+        match cli.command {
+            Some(Command::Serve { idle }) => assert_eq!(idle, 600),
             other => panic!("expected serve, got {other:?}"),
         }
-        match parse(&["pirs", "serve", "--idle", "1", "--socket", "/tmp/s"]).command {
-            Some(Command::Serve { idle, socket }) => {
-                assert_eq!(idle, 1);
-                assert_eq!(socket, Some(PathBuf::from("/tmp/s")));
-            }
+        assert!(cli.global.socket.is_none());
+        let cli = parse(&["pirs", "serve", "--idle", "1", "--socket", "/tmp/s"]);
+        match cli.command {
+            Some(Command::Serve { idle }) => assert_eq!(idle, 1),
             other => panic!("expected serve, got {other:?}"),
         }
+        assert_eq!(cli.global.socket, Some(PathBuf::from("/tmp/s")));
     }
 
     #[test]
     fn stop_takes_a_socket() {
-        match parse(&["pirs", "stop", "--socket", "/tmp/s"]).command {
-            Some(Command::Stop { socket }) => assert_eq!(socket, Some(PathBuf::from("/tmp/s"))),
-            other => panic!("expected stop, got {other:?}"),
-        }
+        let cli = parse(&["pirs", "stop", "--socket", "/tmp/s"]);
+        assert!(matches!(cli.command, Some(Command::Stop)), "{:?}", cli.command);
+        assert_eq!(cli.global.socket, Some(PathBuf::from("/tmp/s")));
+    }
+
+    #[test]
+    fn check_takes_a_cwd_and_defaults_to_this_one() {
+        let cli = parse(&["pirs", "check"]);
+        assert!(matches!(cli.command, Some(Command::Check)), "{:?}", cli.command);
+        assert!(cli.global.cwd.is_none() && cli.global.socket.is_none() && !cli.global.no_start);
+        let cli = parse(&["pirs", "check", "--cwd", "/tmp/p", "--no-start"]);
+        assert!(matches!(cli.command, Some(Command::Check)), "{:?}", cli.command);
+        assert_eq!(cli.global.cwd, Some(PathBuf::from("/tmp/p")));
+        assert!(cli.global.no_start);
+    }
+
+    #[test]
+    fn a_global_option_may_come_before_the_subcommand() {
+        let before = parse(&["pirs", "--cwd", "/tmp/p", "check"]);
+        assert!(matches!(before.command, Some(Command::Check)), "{:?}", before.command);
+        assert_eq!(before.global.cwd, Some(PathBuf::from("/tmp/p")));
+        assert!(before.run.prompt.is_empty(), "`check` is the subcommand, not a prompt");
+        let after = parse(&["pirs", "check", "--cwd", "/tmp/p"]);
+        assert!(matches!(after.command, Some(Command::Check)), "{:?}", after.command);
+        assert_eq!(after.global.cwd, Some(PathBuf::from("/tmp/p")));
+    }
+
+    #[test]
+    fn a_prompt_that_starts_with_a_command_name_is_still_a_prompt() {
+        let cli = parse(&["pirs", "check the build"]);
+        assert!(cli.command.is_none(), "{:?}", cli.command);
+        assert_eq!(cli.run.prompt, ["check the build"]);
+        let with_cwd = parse(&["pirs", "--cwd", "/tmp/p", "check the build"]);
+        assert!(with_cwd.command.is_none(), "{:?}", with_cwd.command);
+        assert_eq!(with_cwd.run.prompt, ["check the build"]);
+        assert_eq!(with_cwd.global.cwd, Some(PathBuf::from("/tmp/p")));
     }
 
     #[test]

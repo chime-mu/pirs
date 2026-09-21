@@ -83,7 +83,19 @@ impl AgentHooks for QueueHooks {
         self.inner.should_stop_after_turn(message).await
     }
     async fn refresh_tools(&self) -> Option<Vec<ToolRef>> {
+        // The inner hooks run first: they may change the agent's state (a
+        // reloaded policy replaces the tool set and the system prompt), and
+        // the state is what both refreshes read back.
+        if let Some(tools) = self.inner.refresh_tools().await {
+            return Some(tools);
+        }
         Some(self.state.lock().unwrap().tools.clone())
+    }
+    async fn refresh_system_prompt(&self) -> Option<String> {
+        if let Some(prompt) = self.inner.refresh_system_prompt().await {
+            return Some(prompt);
+        }
+        Some(self.state.lock().unwrap().system_prompt.clone())
     }
 }
 

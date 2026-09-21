@@ -27,18 +27,18 @@ use pirs_protocol::{
     Message, ModelSpec, NotifyLevel, PromptWhen, ServerPath, SubscribeParams,
 };
 
-use crate::cli::RunArgs;
+use crate::cli::{GlobalArgs, RunArgs};
 use crate::connect::{connect_options, resolve_cwd, resolve_socket};
 
 /// Run one prompt and return the process exit code.
-pub(crate) async fn run(args: RunArgs) -> Result<i32> {
+pub(crate) async fn run(args: RunArgs, global: GlobalArgs) -> Result<i32> {
     let prompt = args.prompt.join(" ");
     if prompt.trim().is_empty() {
         bail!("no prompt given; try `pirs \"why does the build fail?\"` or `pirs --help`");
     }
-    let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let socket = resolve_socket(args.socket.as_deref());
-    let client = Client::connect(connect_options(&socket, !args.no_start)).await?;
+    let cwd = resolve_cwd(global.cwd.as_deref())?;
+    let socket = resolve_socket(global.socket.as_deref());
+    let client = Client::connect(connect_options(&socket, !global.no_start)).await?;
 
     let session = match &args.continue_ {
         None => None,

@@ -1,0 +1,6 @@
+intent = "Claim the same status key as one.pirs.toml, so pirs check reports both."
+
+[[status]]
+key = "branch"
+run = "echo two"
+on = ["start"]

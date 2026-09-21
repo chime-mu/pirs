@@ -217,8 +217,11 @@ impl SessionEntry {
         }
     }
 
-    fn is_assistant_message(&self) -> bool {
-        matches!(self.message(), Some(AgentMessage::Assistant(_)))
+    /// Whether this entry is worth a file on disk: a conversation that never
+    /// reached the model is not persisted (pi's rule), but one where a
+    /// policy's `!cmd` put a command's output into the context is (D-32).
+    fn is_worth_persisting(&self) -> bool {
+        matches!(self.message(), Some(AgentMessage::Assistant(_) | AgentMessage::BashExecution(_)))
     }
 
     fn is_system_message(&self) -> bool {
@@ -1218,7 +1221,7 @@ impl SessionManager {
             return Ok(());
         }
         let Some(path) = self.session_file.clone() else { return Ok(()) };
-        let has_assistant = self.entries.iter().any(SessionEntry::is_assistant_message);
+        let has_assistant = self.entries.iter().any(SessionEntry::is_worth_persisting);
         if !has_assistant {
             if self.flushed {
                 self.append_line(&path, idx)?;
@@ -1636,7 +1639,7 @@ impl SessionManager {
             next_seq,
         };
         mgr.build_index();
-        if mgr.persist && mgr.entries.iter().any(SessionEntry::is_assistant_message) {
+        if mgr.persist && mgr.entries.iter().any(SessionEntry::is_worth_persisting) {
             mgr.rewrite_file()?;
             mgr.flushed = true;
         }

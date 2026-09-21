@@ -14,6 +14,11 @@ A loop reads both sets from its cwd at creation. They are re-read on `loop.reloa
 automatically when one of the loop's own tools writes a file in either location — so an
 agent asked to change pirs writes the file and the change is live on the next turn.
 
+Only the loop's own `write` and `edit` tools trigger that automatic reload: a file written
+by a `bash` redirect, by an `[[on]]` process or by hand from another window does not, since
+the server watches the tool calls and not the filesystem. Send `loop.reload` for those, or
+leave it — the next `loop.create` in that directory reads the file like any other.
+
 ## `intent`
 
 Required, first in the file. One or two sentences saying what the file is for, in the words
@@ -115,8 +120,16 @@ run = "git add -A && git commit -qm 'pirs checkpoint'"
 quiet = true
 ```
 
-Fire and forget: the loop does not wait for the reply. `on start` is therefore also how a
-long-lived extension is started — see "Connected processes".
+Fire and forget: the loop does not wait for the reply, and there is no timeout. `on start`
+is therefore also how a long-lived extension is started — see "Connected processes". A
+non-zero exit is reported as a warning unless `quiet`.
+
+`start` fires once when the loop is created, and again after a reload for the entries that
+are new since the last load — an entry is the same entry when its file, slot, position and
+`run` are unchanged, so an untouched watcher is not started twice. `reload` fires on every
+reload, including the automatic one after the agent writes a policy file itself. A
+`[[status]]` or `[[widget]]` listing an event is *called* instead, with the usual 5 s, and
+its output is sent as `ui.status` (trimmed) or `ui.widget` (one entry per line).
 
 ### `[[command]]` — a `/name` the user can type
 
@@ -156,12 +169,25 @@ name = "bash"
 disabled = true                        # or wrap = "./tools/sandboxed-bash.sh"
 ```
 
+`params.<name>` is the field's JSON Schema, and takes any JSON-Schema keyword, not only
+`type`, `description` and `default`: `enum`, `minimum`, `pattern`, `items`, `format` and the
+rest are passed to the model as written. A field without a `default` is required.
+
 Payload `{ args, id }`. Reply `{ content, details }` or `{ error }`.
 
 ## `[settings]`
 
-One table per file, merged like the slots. `[settings]` replaces `settings.json`; its keys
-are defined in phase 2.
+One table per file, merged key by key like the slots: the last file to set a key wins.
+`[settings]` replaces `settings.json`. It has four keys and no others — `model`, `thinking`,
+`tools` and `tool_execution`; anything else is a conflict `pirs check` reports (D-41).
+
+```toml
+[settings]
+model = "anthropic/claude-sonnet-4-5"   # what a loop runs without --model
+thinking = "medium"                     # its thinking level without --thinking
+tools = ["read", "bash", "edit"]        # the tools it starts with; a [[tool]] is added anyway
+tool_execution = "parallel"             # or "sequential": one tool call at a time
+```
 
 ## `run` semantics
 
@@ -172,13 +198,19 @@ as one JSON line on stdin, and reads the reply from stdout. `PIRS_SOCKET`, `PIRS
 - **A shell string** (anything that is not a path to an executable) runs under `sh -c`. It
   additionally gets each top-level payload field as `PIRS_ARG_<field>` and as `$field`
   interpolation, so a one-liner never parses JSON. Its stdout is the reply, as text.
+  A field larger than 64 KiB — a whole file a `write` tool call carries, say — is **on stdin
+  only**: the kernel refuses an `exec` whose environment and arguments exceed 128 KiB, so
+  such a field is left off `PIRS_ARG_*` and `$field` substitutes the empty string (with a
+  warning in the server's log). Read those from the JSON line, `jq -r .args.text` and such.
 - **A path to an executable** replies with one JSON line on stdout — the same shape as the
   socket, so the same handler works either way. Testable from a shell:
   `echo '{"url":"https://x"}' | ./tools/fetch.py`.
 - A non-zero exit is an error; stderr is the message.
 - `timeout` is a `[[tool]]` field only, in seconds, default 60. Every other slot uses the
   server's fixed 5 s, and `[[on]]` is fire and forget with no timeout at all. On expiry the
-  handler counts as "no opinion" and the loop continues with a warning.
+  handler counts as "no opinion" and the loop continues with a warning. The exception is
+  an `[[input]]` with `handled = true`: the input is consumed whatever the process does,
+  because the file said so, and a failure is recorded as the command's output.
 
 ### Connected processes
 

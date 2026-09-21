@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
@@ -32,7 +32,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::convert;
 use crate::dispatch::Registration;
+use crate::dsl::{self, Policy};
 use crate::log::{self, LoopLog, StarSubscribers};
+use crate::policy;
+use crate::process;
 use crate::session::{get_current_system_message, SessionManager};
 use crate::settings::{self, Settings};
 use crate::system_prompt::{build_system_prompt_sections, load_context_files, BuildSystemPromptOptions};
@@ -55,6 +58,9 @@ pub(crate) struct CreateOptions {
     pub(crate) model: Option<ModelSpec>,
     pub(crate) name: Option<String>,
     pub(crate) session: Option<String>,
+    /// The socket the server listens on, so a called process can connect
+    /// back as a client (`PIRS_SOCKET`, D-23).
+    pub(crate) socket: PathBuf,
 }
 
 /// Per-run bookkeeping: which seqs the current turn and run appended, and
@@ -91,6 +97,10 @@ pub(crate) struct LoopHandle {
     pub(crate) id: String,
     pub(crate) name: Option<String>,
     pub(crate) cwd: PathBuf,
+    /// `PIRS_SOCKET` for every process this loop calls.
+    pub(crate) socket: PathBuf,
+    /// `PIRS_SESSION_DIR` for every process this loop calls.
+    pub(crate) session_dir: PathBuf,
     pub(crate) conversation: String,
     pub(crate) log: Mutex<LoopLog>,
     pub(crate) agent: Agent,
@@ -108,10 +118,24 @@ pub(crate) struct LoopHandle {
     status_keys: Mutex<BTreeSet<String>>,
     widget_keys: Mutex<BTreeSet<String>>,
     last_system: Mutex<Option<SystemFingerprint>>,
-    /// Every process spawned for this loop; killed on close (D-23). Nothing
-    /// spawns one this phase; the structure is what phase 2 and 4 fill.
-    processes: Mutex<Vec<tokio::process::Child>>,
-    closed: AtomicBool,
+    /// The policy for this loop's cwd, as of the last load (D-33).
+    policy: Mutex<Arc<Policy>>,
+    /// What the last load could not do; shown once, at the start of the next
+    /// run, because nothing is subscribed to the loop at `loop.create`.
+    policy_warnings: Mutex<Vec<String>>,
+    /// Set when one of the loop's own writes hit a policy file; applied
+    /// before the next model request of the same run.
+    pending_reload: AtomicBool,
+    /// The `[[on]] event = "start"` entries already started, by identity, so
+    /// a reload starts only the new ones.
+    pub(crate) started_on: Mutex<BTreeSet<String>>,
+    /// Every process spawned for this loop; its whole process group is
+    /// killed on close (D-23).
+    pub(crate) processes: Mutex<Vec<process::Detached>>,
+    /// How many `[[on]]` firings are still starting their processes, so
+    /// `close` does not take the process list before they are in it.
+    pub(crate) on_tasks: AtomicUsize,
+    pub(crate) closed: AtomicBool,
     /// Cancelled by `abort` and `close`; replaced by a fresh token when a run
     /// starts. `Agent::abort` only bites once the run has reached the agent,
     /// so this is what an abort landing while the `input` and `prompt`
@@ -125,8 +149,8 @@ pub(crate) fn resolve_startup_model(registry: &ModelRegistry, spec: Option<&str>
     if let Some(s) = spec {
         return registry.find(s).ok_or_else(|| format!("unknown model {s:?}"));
     }
-    if let (Some(p), Some(m)) = (&settings.default_provider, &settings.default_model) {
-        if let Some(model) = registry.get(p, m) {
+    if let Some(spec) = &settings.default_model {
+        if let Some(model) = registry.find(spec) {
             return Ok(model);
         }
     }
@@ -160,7 +184,10 @@ impl LoopHandle {
             return Err(CreateError::Invalid(format!("cwd {} is not a directory", cwd.display())));
         }
         let cwd_str = cwd.to_string_lossy().into_owned();
-        let settings = settings::load_settings(&cwd);
+        // One load: the policy is the loop's `[settings]`, its extra tools,
+        // its prompt and its handlers, and it is re-read only on reload.
+        let policy = Arc::new(dsl::load(&cwd));
+        let settings = Settings::from_policy(&policy.settings);
         let registry = registry_for(&cwd);
 
         let mut session = match &opts.session {
@@ -201,8 +228,12 @@ impl LoopHandle {
 
         let agent = Agent::new(model, Arc::new(NoHooks));
         agent.set_thinking_level(thinking);
-        let sequential = settings.tool_execution.as_deref() == Some("sequential");
-        agent.with_state(|s| s.tool_execution = if sequential { ToolExecutionMode::Sequential } else { ToolExecutionMode::Parallel });
+        // `settings.json`'s `toolExecution` is `[settings] tool_execution`.
+        let execution = match settings.tool_execution {
+            Some(dsl::ToolExecution::Sequential) => ToolExecutionMode::Sequential,
+            Some(dsl::ToolExecution::Parallel) | None => ToolExecutionMode::Parallel,
+        };
+        agent.with_state(|s| s.tool_execution = execution);
         let last_system = get_current_system_message(&ctx.messages).map(|m| SystemFingerprint::of(&m));
         if !ctx.messages.is_empty() {
             agent.replace_messages(ctx.messages);
@@ -213,10 +244,20 @@ impl LoopHandle {
             context_files: load_context_files(&cwd),
             ..Default::default()
         };
+        let session_dir = session.get_session_dir().to_path_buf();
+        // `[settings] tools` is the loop's starting selection; a tool the
+        // policy declares is offered without being asked for.
+        let active: Vec<String> = match &policy.settings.tools {
+            Some(names) => names.clone(),
+            None => tools::DEFAULT_TOOL_NAMES.iter().map(|s| (*s).to_owned()).collect(),
+        };
+        let warnings = policy::load_warnings(&policy);
         let handle = Arc::new(LoopHandle {
             id: id.clone(),
             name,
             cwd: cwd.clone(),
+            socket: opts.socket,
+            session_dir,
             conversation,
             log: Mutex::new(LoopLog::new(id, session, star)),
             agent: agent.clone(),
@@ -226,7 +267,7 @@ impl LoopHandle {
             working: AtomicBool::new(false),
             idle: Notify::new(),
             builtin: tools::builtin_tools(&cwd),
-            active_tools: Mutex::new(tools::DEFAULT_TOOL_NAMES.iter().map(|s| s.to_string()).collect()),
+            active_tools: Mutex::new(active),
             prompt_options: Mutex::new(prompt_options),
             next_input: Mutex::new(Vec::new()),
             run: Mutex::new(RunState::default()),
@@ -234,7 +275,12 @@ impl LoopHandle {
             status_keys: Mutex::new(BTreeSet::new()),
             widget_keys: Mutex::new(BTreeSet::new()),
             last_system: Mutex::new(last_system),
+            policy: Mutex::new(policy),
+            policy_warnings: Mutex::new(warnings),
+            pending_reload: AtomicBool::new(false),
+            started_on: Mutex::new(BTreeSet::new()),
             processes: Mutex::new(Vec::new()),
+            on_tasks: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             cancel: Mutex::new(CancellationToken::new()),
         });
@@ -294,22 +340,63 @@ impl LoopHandle {
         }
     }
 
-    /// Every tool the model could be given: built-ins (unless a handler
-    /// provides one of the same name) then handler tools.
+    /// The policy as of the last load.
+    pub(crate) fn policy(&self) -> Arc<Policy> {
+        self.policy.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Every tool the model could be given, after the policy has had its say:
+    /// built-ins (dropped when `disabled`, routed through a `wrap`, hidden
+    /// behind a handler of the same name), then the tools the policy
+    /// declares, then handler tools.
     pub(crate) fn available_tools(self: &Arc<Self>) -> Vec<ToolRef> {
+        let policy = self.policy();
         let handler_tools = self.handler_tools();
-        let mut all: Vec<ToolRef> =
-            self.builtin.iter().filter(|b| !handler_tools.iter().any(|h| h.name() == b.name())).cloned().collect();
+        let taken = |name: &str| handler_tools.iter().any(|h| h.name() == name);
+        let mut all: Vec<ToolRef> = Vec::new();
+        for builtin in &self.builtin {
+            let name = builtin.name();
+            if taken(&name) {
+                continue;
+            }
+            match policy.tools.iter().find(|tool| tool.name == name) {
+                Some(tool) if tool.disabled => continue,
+                Some(tool) => all.push(self.policy_tool(tool, Some(builtin))),
+                None => all.push(builtin.clone()),
+            }
+        }
+        for tool in &policy.tools {
+            if tool.disabled || taken(&tool.name) || self.builtin.iter().any(|b| b.name() == tool.name) {
+                continue;
+            }
+            all.push(self.policy_tool(tool, None));
+        }
         all.extend(handler_tools);
         all
     }
 
+    /// What `loop.attach` tells a client: the tools it may see called, the
+    /// policy's slash commands, and the `ui.status` and `ui.widget` keys it
+    /// may receive (D-13).
     pub(crate) fn manifest(self: &Arc<Self>) -> Manifest {
+        let policy = self.policy();
+        let mut status_keys = policy.status_keys.clone();
+        for key in self.status_keys.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            if !status_keys.contains(key) {
+                status_keys.push(key.clone());
+            }
+        }
+        let mut widget_keys = policy.widget_keys.clone();
+        for key in self.widget_keys.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            if !widget_keys.contains(key) {
+                widget_keys.push(key.clone());
+            }
+        }
         Manifest {
             tools: self.available_tools().iter().map(convert::tool_info).collect(),
-            commands: Vec::new(),
-            status_keys: self.status_keys.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect(),
-            widget_keys: self.widget_keys.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect(),
+            commands: policy.commands.clone(),
+            status_keys,
+            widget_keys,
         }
     }
 
@@ -372,18 +459,87 @@ impl LoopHandle {
         Ok(())
     }
 
-    /// `loop.reload`: re-read the context files (`AGENTS.md` …). Policy files
-    /// arrive in phase 2, so the returned list is empty. Refused while working.
-    pub(crate) fn reload(self: &Arc<Self>) -> Result<Vec<ServerPath>, String> {
+    /// `loop.reload`: re-read the context files (`AGENTS.md` …) and the
+    /// policy files, and act on what changed. Refused while working — a run
+    /// reloads itself, before its next request, when the agent's own write
+    /// touched a policy file (D-33).
+    pub(crate) async fn reload(self: &Arc<Self>) -> Result<Vec<ServerPath>, String> {
         if self.is_working() {
             return Err("cannot reload while the loop is working".into());
         }
         let files = load_context_files(&self.cwd);
         self.prompt_options.lock().unwrap_or_else(|e| e.into_inner()).context_files = files;
-        self.refresh_tools();
-        let files: Vec<ServerPath> = Vec::new();
+        Ok(self.apply_reload().await)
+    }
+
+    /// Re-read the policy and make it the loop's: new tool set, new system
+    /// prompt, `on.reload` to everything listening, and `on start` for the
+    /// entries that were not there before.
+    ///
+    /// Nothing here fails: a file that will not parse leaves the entries that
+    /// did load in place and becomes a warning (`ui.notify`).
+    pub(crate) async fn apply_reload(self: &Arc<Self>) -> Vec<ServerPath> {
+        let policy = Arc::new(dsl::load(&self.cwd));
+        let files: Vec<ServerPath> = policy
+            .files
+            .iter()
+            .map(|path| ServerPath::from(path.to_string_lossy().into_owned()))
+            .collect();
+        let warnings = policy::load_warnings(&policy);
+        *self.policy.lock().unwrap_or_else(|e| e.into_inner()) = policy;
+        *self.policy_warnings.lock().unwrap_or_else(|e| e.into_inner()) = warnings;
+        self.flush_policy_warnings();
+
+        let (chosen, base, prompt) = self.assemble_prompt().await;
+        self.persist_system_message(&base, &prompt, &chosen, !self.agent.is_streaming());
+
+        // `on start` for the entries new since the last load, then
+        // `on.reload` for everything (D-23).
+        self.fire_dsl_on(&OnPayload::Start(OnStartPayload {
+            loop_id: self.id.clone(),
+            cwd: ServerPath::from(self.cwd.to_string_lossy().into_owned()),
+        }));
         self.notify_on(OnPayload::Reload(OnReloadPayload { loop_id: self.id.clone(), files: files.clone() }));
-        Ok(files)
+        files
+    }
+
+    /// Whether a reload is owed, clearing the flag.
+    pub(crate) fn take_pending_reload(&self) -> bool {
+        self.pending_reload.swap(false, Ordering::SeqCst)
+    }
+
+    /// Show what the last load could not do, once.
+    pub(crate) fn flush_policy_warnings(&self) {
+        let warnings = std::mem::take(&mut *self.policy_warnings.lock().unwrap_or_else(|e| e.into_inner()));
+        for warning in warnings {
+            tracing::warn!(loop_id = %self.id, "{warning}");
+            self.ui_notify(NotifyLevel::Warning, warning);
+        }
+    }
+
+    /// The system prompt as the next request will see it: the policy's
+    /// `[[prompt]]` entries as the `<policy>` section of the base prompt,
+    /// then the registered `prompt` handlers on top. Returns the tools, the
+    /// base (policy included) and the final prompt, and leaves the final one
+    /// on the agent.
+    pub(crate) async fn assemble_prompt(self: &Arc<Self>) -> (Vec<ToolRef>, String, String) {
+        let policy = self.policy();
+        let (section, failures) = policy::prompt_section(&policy, &self.call_env("prompt")).await;
+        for failure in failures {
+            self.policy_warn(&failure.origin, failure.message);
+        }
+        {
+            let mut options = self.prompt_options.lock().unwrap_or_else(|e| e.into_inner());
+            if section.is_empty() {
+                options.sections.remove(policy::PROMPT_SECTION);
+            } else {
+                options.sections.insert(policy::PROMPT_SECTION.to_owned(), section);
+            }
+        }
+        let (chosen, base) = self.refresh_tools();
+        let prompt = self.dispatch_prompt(base.clone()).await;
+        self.agent.set_system_prompt(prompt.clone());
+        (chosen, base, prompt)
     }
 
     // ----- prompting --------------------------------------------------------
@@ -442,6 +598,9 @@ impl LoopHandle {
 
     async fn run(self: Arc<Self>, text: String, cancel: CancellationToken) {
         self.set_status(LoopState::Working, None);
+        // Nothing is subscribed to a loop at `loop.create`, so what its
+        // policy load could not do is said here, where a client can hear it.
+        self.flush_policy_warnings();
         let held: Vec<String> = std::mem::take(&mut *self.next_input.lock().unwrap_or_else(|e| e.into_inner()));
         let mut prompts = Vec::new();
         for t in held.into_iter().chain(std::iter::once(text)) {
@@ -453,8 +612,7 @@ impl LoopHandle {
             self.finish_run(Some("handled".into()));
             return;
         }
-        let (chosen, base_prompt) = self.refresh_tools();
-        let prompt = self.dispatch_prompt(base_prompt.clone()).await;
+        let (chosen, base_prompt, prompt) = self.assemble_prompt().await;
         if cancel.is_cancelled() {
             // An abort or a close landed while the handlers ran: no model
             // call, no system message, straight to idle.
@@ -462,8 +620,7 @@ impl LoopHandle {
             return;
         }
         *self.run.lock().unwrap_or_else(|e| e.into_inner()) = RunState::default();
-        self.persist_system_message(&base_prompt, &prompt, &chosen);
-        self.agent.set_system_prompt(prompt);
+        self.persist_system_message(&base_prompt, &prompt, &chosen, true);
 
         let detail = match self.agent.prompt(prompts).await {
             Err(e) => Some(format!("error: {e}")),
@@ -480,7 +637,7 @@ impl LoopHandle {
         self.finish_run(detail);
     }
 
-    fn finish_run(&self, detail: Option<String>) {
+    fn finish_run(self: &Arc<Self>, detail: Option<String>) {
         self.set_status(LoopState::Idle, detail);
         let seqs = std::mem::take(&mut self.run.lock().unwrap_or_else(|e| e.into_inner()).run_seqs);
         if let Some(Event::LoopRunEnd(event)) = self.log_custom(log::CT_RUN_END, json!({ "messages": seqs })) {
@@ -493,7 +650,12 @@ impl LoopHandle {
     /// Log a system message when the prompt or tool loadout differs from the
     /// last one logged (pi's leading system message with `sections` and
     /// `toolsAdded`). A `prompt` handler's change is visible here (D-21).
-    fn persist_system_message(&self, base: &str, prompt: &str, tools: &[ToolRef]) {
+    /// `append` puts the message in the agent's own context as well as in
+    /// the log. A reload that lands *during* a run only logs: the run's
+    /// context is already snapshotted and the new prompt reaches the model
+    /// through the per-request refresh, so pushing a message into the
+    /// agent's state mid-stream would only disturb the streaming one.
+    fn persist_system_message(&self, base: &str, prompt: &str, tools: &[ToolRef], append: bool) {
         let sections: BTreeMap<String, Option<String>> = {
             let o = self.prompt_options.lock().unwrap_or_else(|e| e.into_inner());
             build_system_prompt_sections(&o).into_iter().map(|(k, v)| (k, Some(v))).collect()
@@ -522,7 +684,9 @@ impl LoopHandle {
         *last = Some(fingerprint);
         drop(last);
         let message = AgentMessage::System(message);
-        self.agent.append_message(message.clone());
+        if append {
+            self.agent.append_message(message.clone());
+        }
         let seq = {
             let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
             log.append_message(message)
@@ -541,12 +705,25 @@ impl LoopHandle {
         if self.is_working() {
             self.wait_idle().await;
         }
-        let children: Vec<tokio::process::Child> =
-            std::mem::take(&mut *self.processes.lock().unwrap_or_else(|e| e.into_inner()));
-        for mut child in children {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
+        // The whole process group of each, not just the child: an
+        // `[[on]] event = "start" run = "./watch &"` leaves grandchildren.
+        //
+        // Two waits first, both bounded by the same short grace: for the
+        // `[[on]]` firings still starting their processes (the `turn_end`
+        // that fired a moment ago is one), and then for those processes to
+        // finish on their own. A checkpoint commit gets to finish; a watcher
+        // does not, and is wound down — `SIGTERM`, then `SIGKILL` a grace
+        // later — by `process::wind_down`.
+        let deadline = tokio::time::Instant::now() + process::CLOSE_GRACE;
+        while self.on_tasks.load(Ordering::SeqCst) > 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        let children: Vec<process::Detached> =
+            std::mem::take(&mut *self.processes.lock().unwrap_or_else(|e| e.into_inner()));
+        while children.iter().any(|child| !child.has_exited()) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        process::wind_down(children).await;
         self.set_status(LoopState::Idle, Some("closed".to_owned()));
         self.handlers.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
@@ -618,7 +795,7 @@ impl LoopHandle {
         }
     }
 
-    fn on_message_end(&self, message: AgentMessage) {
+    fn on_message_end(self: &Arc<Self>, message: AgentMessage) {
         // An aborted or errored assistant message with nothing in it is not
         // worth a log entry (as in pi).
         if let AgentMessage::Assistant(a) = &message {
@@ -666,6 +843,12 @@ impl LoopHandle {
         if matches!(result.tool_name.as_str(), "write" | "edit") && !result.is_error {
             if let Some(path) = convert::value_str(result.details.as_ref().and_then(|d| d.get("path"))) {
                 self.log_custom(log::CT_FS_CHANGED, json!({ "path": path, "by": ChangedBy::Tool }));
+                // Ask, write, live (D-33): the loop's own write to one of
+                // its policy files reloads it before the next request.
+                if dsl::is_policy_path(&self.cwd, Path::new(&path)) {
+                    tracing::info!(loop_id = %self.id, path, "the loop wrote a policy file; reloading");
+                    self.pending_reload.store(true, Ordering::SeqCst);
+                }
             }
         }
 
@@ -718,6 +901,18 @@ impl AgentHooks for LoopHooks {
             usage: None,
             terminate: None,
         })
+    }
+
+    /// Before every LLM request (`pi_agent` calls this first): apply a
+    /// reload the loop's own write asked for, so the file the agent just
+    /// wrote shapes the very next request (D-33). `None` leaves the tool set
+    /// to the agent's state, which the reload has just replaced.
+    async fn refresh_tools(&self) -> Option<Vec<ToolRef>> {
+        let handle = self.handle.upgrade()?;
+        if handle.take_pending_reload() {
+            handle.apply_reload().await;
+        }
+        None
     }
 
     async fn get_api_key(&self, provider: &str) -> Option<String> {

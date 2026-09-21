@@ -1,0 +1,15 @@
+[
+  {
+    "text": "writing the policy. ",
+    "toolCalls": [
+      {
+        "name": "write",
+        "arguments": {
+          "path": ".pirs/ext/new.pirs.toml",
+          "content": "intent = \"Always mention the marker.\"\n\n[[prompt]]\ntext = \"MARKER-42\"\n"
+        }
+      }
+    ]
+  },
+  "written"
+]

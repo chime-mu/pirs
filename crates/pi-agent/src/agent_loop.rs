@@ -80,6 +80,9 @@ async fn run_loop(
                 if let Some(tools) = hooks.refresh_tools().await {
                     input.tools = tools;
                 }
+                if let Some(prompt) = hooks.refresh_system_prompt().await {
+                    input.system_prompt = prompt;
+                }
                 stream_assistant_response(input, &config, &hooks, &cancel, &emit).await
             };
             new_messages.push(AgentMessage::Assistant(message.clone()));

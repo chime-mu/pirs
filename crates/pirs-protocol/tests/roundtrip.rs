@@ -277,6 +277,7 @@ fn all_responses() -> Vec<(Request, Response)> {
                         "/work/.pirs/ext/b.pirs.toml".into(),
                     ],
                 }],
+                rendered: "files:\n  /work/.pirs/ext/a.pirs.toml\n  /work/.pirs/ext/b.pirs.toml\n".into(),
                 system_prompt: "You are…".into(),
             }),
         ),

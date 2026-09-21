@@ -331,6 +331,12 @@ pub trait AgentHooks: Send + Sync {
     async fn refresh_tools(&self) -> Option<Vec<ToolRef>> {
         None
     }
+    /// Called before every LLM request, after `refresh_tools`; return `Some`
+    /// to replace the system prompt for the rest of the run (a policy file
+    /// the agent itself wrote takes effect on its next request).
+    async fn refresh_system_prompt(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct NoHooks;
