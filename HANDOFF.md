@@ -1,6 +1,7 @@
 # Handoff
 
-Written 2026-09-21 at the end of the `docs/design/PLAN.md` run. Read this first, then
+Written 2026-09-21 at the end of the `docs/design/PLAN.md` run and updated the same day after
+the user accepted every proposed decision. Read this first, then
 `STATUS.md` for the phase table, `README.md` for the user's view, `docs/index.md` for the
 docs map, and `docs/design/README.md` if you are discussing the design.
 
@@ -22,7 +23,9 @@ extension docs with them. The workspace is `pi-ai`, `pi-agent`, `pirs-protocol`,
 | 5 Several agents | cec282d | 324 | `phase-5.sh` (12 checks) |
 | 6 Remote and contained servers | dfec48b | 354 | `phase-6.sh` (13 checks) |
 | 7 Intent tooling | 9b0c92d | 380 | `phase-7.sh` (27 checks) |
-| Final tidy and review fixups | the last two commits on the branch | 381 | all eight from a clean checkout of the tidy commit; the fixup commit re-verified in place |
+| Final tidy | d30a517 | 380 | all eight from a clean checkout |
+| Review fixups | e881205 | 381 | all eight, re-verified in place |
+| Decisions accepted and folded | 17ab50f, 1a6de04 | docs only | — |
 
 Phase 3's total is lower than phase 2's because `pi-cli`'s 71 tests left with it.
 
