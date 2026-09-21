@@ -26,9 +26,10 @@ Two decisions so this never has to change:
   if ever wanted, is a new protocol major. Raw bytes never travel on this wire: terminal
   data belongs to a pty server's own protocol, not this one.
 - **Large payloads travel by reference.** A tool result or attachment above a threshold
-  (proposed 64 KB) is written to the session directory and the message carries
-  `{ "ref": path, "bytes": n }` instead of the content; the path is read back with `fs.read`.
-  Images already work this way. This keeps every line small.
+  (64 KB) is written under the loop's session directory and the event carries
+  `{ "ref": path, "bytes": n }` instead of the content; the path is read back with `fs.read`,
+  which returns it whole (D-39). The threshold applies to what the server sends unasked;
+  an explicit read is the client asking for the bytes. This keeps every line small.
 
 ## Two roles, kept distinct
 
@@ -79,17 +80,17 @@ what it may do; it is recorded in the session log alongside the original.
 | Request | Meaning |
 |---|---|
 | `hello { client, protocol_version }` → `{ server, protocol_version }` | first message on every connection; the server refuses incompatible majors |
-| `loop.create { cwd, model, session? }` / `loop.list` / `loop.attach` / `loop.close` | lifecycle; `loop.attach` returns the loop's merged manifest: tools, commands, status and widget keys |
+| `loop.create { cwd, model, session?, name? }` / `loop.list { cwd? }` / `loop.attach` / `loop.close` | lifecycle; `loop.list` returns the running loops and, when `cwd` is given, the stored conversations for that directory, so a client can offer past conversations without touching the server's filesystem (D-38); `loop.attach` returns the loop's merged manifest: tools, commands, status and widget keys |
 | `loop.prompt { loop, text, when }` | `when`: `now` (steer), `after_turn`, `next_input` |
 | `loop.abort { loop }` | Esc |
 | `loop.wait { loop }` | blocks until the loop is idle — what subagents and scripts need |
 | `subscribe { loop \| "*", events, since? }` / `unsubscribe` | observer; `since` replays events after that `seq` from the session log, across runs; deltas are not replayed (D-06) |
 | `register { loop, slot, timeout }` / `unregister` | handler |
 | `ui.status` / `ui.widget` / `ui.notify` | an extension asking the server to emit |
-| `fs.list { loop, path }` / `fs.read { loop, path }` | read-only file access on the server that runs the loop; `fs.read` returns content or `{ ref, bytes }` above the threshold, and a `ref` is itself a server path that `fs.read` serves (D-11). No write; editing is the agent's job or the user's editor |
+| `fs.list { loop, path }` / `fs.read { loop, path }` | read-only file access on the server that runs the loop; `fs.list` entries carry a server-produced `path` to hand back; `fs.read` returns the content of the path it is given, an ordinary file or a `ref` (D-11, D-39), refusing only files above a hard cap. No write; editing is the agent's job or the user's editor |
 | `loop.tools { loop, names }` / `loop.model { loop, spec }` | control |
 | `loop.reload { loop }` | re-read the loop's policy files (D-33 makes this automatic after the loop's own writes) |
-| `dsl.check { cwd }` | run the policy loader and checker where the files live; what `pirs check` calls |
+| `dsl.check { cwd }` | run the policy loader and checker where the files live; returns the files, the manifest, every conflict, the fully assembled system prompt, and `rendered`, the merged policy as text (D-40); what `pirs check` calls |
 
 Anything not in these three tables does not exist.
 

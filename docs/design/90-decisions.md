@@ -337,7 +337,7 @@ unspecified. Proposed: every called process gets the JSON payload on stdin, and 
 string additionally gets each top-level field as an environment variable (`PIRS_ARG_url`)
 and `$name` interpolation, so a one-liner never has to parse JSON.
 
-**D-38 · proposed · 2026-09-21 · `loop.list` takes an optional `cwd` and returns stored conversations.**
+**D-38 · accepted · 2026-09-21 · `loop.list` takes an optional `cwd` and returns stored conversations.**
 Recorded by the orchestrator during phase 0. S2 says the UI "has a way to open past
 conversations" and D-28 says the sidebar "offers past conversations separately"; the plan's
 `pirs --list` prints the conversations in the cwd and `--continue <name-or-id>` picks one.
@@ -348,7 +348,7 @@ the server's list of stored conversations for `cwd` (id, name, cwd, path, update
 empty when `cwd` is absent. `loop.create { session }` continues one by id. Evidence: the
 phase 1 acceptance script (`pirs --list` shows two conversations) cannot be written otherwise.
 
-**D-39 · proposed · 2026-09-21 · `fs.read` serves the requested path in full; refs appear in events.**
+**D-39 · accepted · 2026-09-21 · `fs.read` serves the requested path in full; refs appear in events.**
 Recorded by the orchestrator during phase 1. `30-protocol.md` says `fs.read` "returns content or
 `{ ref, bytes }` above the threshold, and a `ref` is itself a server path that `fs.read` serves"
 (D-11). Read literally, `fs.read` on any file above 64 KB returns a ref naming that same file,
@@ -362,7 +362,7 @@ above a hard cap (16 MB, `INVALID_PARAMS`). The `{ ref, bytes }` form stays in t
 the shape of a by-reference payload. Evidence: the phase 1 acceptance ("a >64 KB scripted tool
 result arrives as a `ref` and `fs.read` returns it") is satisfiable only this way.
 
-**D-40 · proposed · 2026-09-21 · `dsl.check` returns the rendered merged policy.**
+**D-40 · accepted · 2026-09-21 · `dsl.check` returns the rendered merged policy.**
 Recorded by the orchestrator during phase 2. S4 and `40-dsl.md` say `pirs check` prints the
 merged policy, every conflict, and the assembled system prompt. `DslCheckResult` carries
 `files`, `manifest`, `conflicts` and `system_prompt`; the manifest shows tools, commands and
@@ -373,7 +373,7 @@ field, `rendered: String`, the server's human-readable rendering of the composed
 sources, intents). It is display text, not a second schema. Evidence: the phase 2 review found
 `dsl::render` had no production caller.
 
-**D-41 · proposed · 2026-09-21 · `[settings]` carries `tool_execution`.**
+**D-41 · accepted · 2026-09-21 · `[settings]` carries `tool_execution`.**
 Recorded by the orchestrator during phase 2. The plan folds `settings.json` into a
 `[settings]` table (open question 6 taken as yes) and names `model`, `thinking`, `tools`.
 `settings.json` also had `toolExecution` (`parallel` | `sequential`), which the loop server

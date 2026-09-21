@@ -169,5 +169,7 @@ conflict without starting a loop.
 - **Which DSL files apply to a loop?** Proposed: global + the loop's cwd project files, read
   at `loop.create`, on `loop.reload`, and whenever one of the loop's own tools writes a
   policy file (D-33). Not otherwise re-read per turn.
-- **`settings.json`**: fold into `.pirs.toml` as a `[settings]` table so there is one loader
-  and one checker. Proposed yes.
+- **`settings.json`** is folded into `.pirs.toml` as a `[settings]` table with four keys,
+  `model`, `thinking`, `tools`, `tool_execution` (`parallel` | `sequential`), so there is one
+  loader and one checker (D-41). `settings.json` is not read; `models.json`, a provider
+  catalogue rather than a setting, still is. A later file wins per key.

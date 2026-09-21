@@ -28,17 +28,17 @@ Phase 3's total is lower than phase 2's because `pi-cli`'s 71 tests left with it
 
 ## Decisions taken without the user
 
-Entries at the end of `docs/design/90-decisions.md`, with the evidence. D-38 to D-41 are still
-**proposed** and the layer files were not edited for them (one exception below); D-42 and
-D-43 are accepted and folded. Accept, reject, or
+Entries at the end of `docs/design/90-decisions.md`, with the evidence. All six were
+accepted by the user on 2026-09-21 and folded into the layer files (D-38 to D-40 into
+`30-protocol.md`, D-41 to D-43 into `40-dsl.md`). Accept, reject, or
 supersede each; the code follows the entry as written.
 
-- **D-38** `loop.list { cwd? }` returns stored conversations. (phase 0)
+- **D-38** `loop.list { cwd? }` returns stored conversations. (phase 0) **Accepted, folded.**
 - **D-39** `fs.read` serves the requested path in full; by-reference payloads appear in
-  events and tool results. (phase 1)
+  events and tool results. (phase 1) **Accepted, folded.**
 - **D-40** `dsl.check` returns `rendered`, the merged policy as text, so `pirs check` can
-  print it. (phase 2)
-- **D-41** `[settings]` has four keys: `model`, `thinking`, `tools`, `tool_execution`. (phase 2)
+  print it. (phase 2) **Accepted, folded.**
+- **D-41** `[settings]` has four keys: `model`, `thinking`, `tools`, `tool_execution`. (phase 2) **Accepted, folded.**
 - **D-42** A `[[tool]]` with `params` and neither `run` nor `loop` declares a tool served by
   whichever client registered `tool.<name>`. (phase 4) **Accepted by the user 2026-09-21 and
   folded into `40-dsl.md`.**
